@@ -1,0 +1,54 @@
+[identity]
+name = "Your Name"
+email = "you@example.com"
+
+[scan]
+folders = ["inbox"]
+scan_unread_only = true
+max_messages_per_scan = 25
+thread_context_messages = 5
+reply_mode = "reply"
+dry_run = false
+processed_category = ""
+apply_processed_category = false
+
+[filters]
+exclude_newsletters = true
+exclude_automated = true
+exclude_cc_only = true
+require_direct_address = true
+newsletter_header_detection = true
+sender_patterns = [
+  "no-reply",
+  "noreply",
+  "do-not-reply",
+  "donotreply",
+  "mailer-daemon",
+]
+domain_patterns = [
+  "mailer.",
+  "notifications.",
+]
+group_alias_patterns = [
+  "all@",
+  "team@",
+  "staff@",
+  "newsletter@",
+  "announce@",
+]
+max_direct_recipients = 4
+address_score_threshold = 2
+
+[llm]
+provider = "openai"
+model = "gpt-4o-mini"
+style_instructions = "Write concise, professional replies. Prefer short responses unless more detail is clearly needed. Do not invent facts, do not over-commit, and ask a clarifying question if context is insufficient."
+signature_block = "Best,\nYour Name"
+max_input_chars = 12000
+
+[state]
+database_path = "./data/edraft.sqlite3"
+
+[logging]
+level = "INFO"
+format = "json"
