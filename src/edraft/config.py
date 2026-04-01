@@ -28,7 +28,7 @@ class ScanConfig:
     scan_unread_only: bool = True
     max_messages_per_scan: int = 25
     thread_context_messages: int = 5
-    reply_mode: str = "reply"
+    reply_mode: str = "auto"
     dry_run: bool = False
     processed_category: str | None = None
     apply_processed_category: bool = False
@@ -51,7 +51,8 @@ class FilterConfig:
 @dataclass(slots=True)
 class LLMConfig:
     provider: str = "openai"
-    model: str = "gpt-4o-mini"
+    model: str = "gpt-5.4"
+    reasoning_effort: str | None = "medium"
     style_instructions: str = (
         "Write concise, professional replies. Prefer short responses unless "
         "more detail is clearly needed. Do not invent facts, ask a clarifying "
@@ -132,9 +133,9 @@ def parse_app_config(raw: dict[str, Any], source_path: Path) -> AppConfig:
         raise ConfigError("identity.name and identity.email must be non-empty")
 
     scan_raw = raw.get("scan", {})
-    reply_mode = str(scan_raw.get("reply_mode", "reply")).strip().lower()
-    if reply_mode not in {"reply", "reply_all"}:
-        raise ConfigError("scan.reply_mode must be 'reply' or 'reply_all'")
+    reply_mode = str(scan_raw.get("reply_mode", "auto")).strip().lower()
+    if reply_mode not in {"auto", "reply", "reply_all"}:
+        raise ConfigError("scan.reply_mode must be 'auto', 'reply', or 'reply_all'")
     processed_category = str(scan_raw.get("processed_category", "")).strip() or None
     scan = ScanConfig(
         folders=_coerce_list(scan_raw.get("folders", ["inbox"]), "scan.folders") or ["inbox"],
@@ -167,7 +168,12 @@ def parse_app_config(raw: dict[str, Any], source_path: Path) -> AppConfig:
     llm_raw = raw.get("llm", {})
     llm = LLMConfig(
         provider=str(llm_raw.get("provider", "openai")).strip().lower(),
-        model=str(llm_raw.get("model", "gpt-4o-mini")).strip(),
+        model=str(llm_raw.get("model", "gpt-5.4")).strip(),
+        reasoning_effort=(
+            str(llm_raw["reasoning_effort"]).strip().lower()
+            if "reasoning_effort" in llm_raw and llm_raw["reasoning_effort"] is not None
+            else "medium"
+        ),
         style_instructions=str(llm_raw.get("style_instructions", DEFAULT_STYLE_INSTRUCTIONS)),
         signature_block=(str(llm_raw["signature_block"]) if "signature_block" in llm_raw else None),
         max_input_chars=int(llm_raw.get("max_input_chars", 12000)),

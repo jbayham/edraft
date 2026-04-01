@@ -146,16 +146,29 @@ class GraphClient:
         self,
         *,
         source_message_id: str,
-        comment: str,
+        comment: str | None = None,
         reply_mode: str = "reply",
     ) -> DraftResult:
         action = "createReplyAll" if reply_mode == "reply_all" else "createReply"
+        payload = {"comment": comment} if comment is not None else None
         response = self._request(
             "POST",
             f"/me/messages/{urllib.parse.quote(source_message_id)}/{action}",
-            json={"comment": comment},
+            json=payload,
         )
         return DraftResult.from_graph(response.json())
+
+    def update_message_body_html(self, message_id: str, html_content: str) -> None:
+        self._request(
+            "PATCH",
+            f"/me/messages/{urllib.parse.quote(message_id)}",
+            json={
+                "body": {
+                    "contentType": "HTML",
+                    "content": html_content,
+                }
+            },
+        )
 
     def add_category_to_message(self, message_id: str, category: str, existing: list[str]) -> None:
         categories = list(dict.fromkeys([*existing, category]))

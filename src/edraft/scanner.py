@@ -36,7 +36,11 @@ class InboxScanner:
             graph_client,
             max_messages=config.scan.thread_context_messages,
         )
-        self.draft_creator = DraftCreator(graph_client, reply_mode=config.scan.reply_mode)
+        self.draft_creator = DraftCreator(
+            graph_client,
+            reply_mode=config.scan.reply_mode,
+            identity=config.identity,
+        )
         self.logger = logging.getLogger("edraft.scanner")
 
     def scan_once(self, *, dry_run: bool | None = None) -> ScanReport:

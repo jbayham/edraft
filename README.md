@@ -45,7 +45,7 @@ Core modules:
 
 ### Why reply-draft endpoints matter
 
-This project uses Microsoft Graph reply-draft actions instead of creating a new message draft. That preserves Outlook threading and reply semantics. In practice, `edraft` calls `createReply` by default, or `createReplyAll` if you switch `scan.reply_mode` to `reply_all`.
+This project uses Microsoft Graph reply-draft actions instead of creating a new message draft. That preserves Outlook threading and reply semantics. By default, `edraft` uses `scan.reply_mode = "auto"`: it calls `createReplyAll` when the message includes other recipients in `To` or `Cc`, and `createReply` otherwise.
 
 ## Setup
 
@@ -68,6 +68,8 @@ Edit `config/edraft.toml` for your identity, scan preferences, filters, and LLM 
 
 Edit `.env` for your Microsoft and OpenAI credentials.
 
+If your tenant already allows the public client app used by `Microsoft365R`, you can leave `MICROSOFT_CLIENT_ID` unset and `edraft` will use that published client ID as a fallback. `edraft` still requests only `User.Read` and `Mail.ReadWrite`.
+
 ## Azure App Registration
 
 Use a delegated public-client app for a single-user desktop workflow.
@@ -89,6 +91,15 @@ Use a delegated public-client app for a single-user desktop workflow.
 You do not need to add `offline_access` manually in the app code or portal permissions list for this tool. MSAL handles the reserved OIDC scopes for public-client sign-in flows.
 
 The first `edraft test-auth` or `edraft scan` run opens a local sign-in flow through MSAL. Tokens are cached locally in `data/msal_token_cache.bin` unless you override `EDRAFT_TOKEN_CACHE_PATH`.
+
+### Optional fallback: reuse the Microsoft365R public client
+
+If your organization already permits the public client used by the R package `Microsoft365R`, `edraft` can reuse it. In that case:
+
+- set `MICROSOFT_TENANT_ID`
+- leave `MICROSOFT_CLIENT_ID` blank or unset
+
+`edraft` will fall back to the published Microsoft365R client ID. This can help when your tenant blocks approval of a new app registration. The tradeoff is that the public client registration itself is broader than `edraft`, even though `edraft` still requests only `User.Read` and `Mail.ReadWrite`.
 
 ## Configuration
 
@@ -225,6 +236,7 @@ The tests mock Graph and LLM boundaries and cover:
 
 - `OPENAI_API_KEY must be set`: add your OpenAI API key to `.env`.
 - Graph login fails on first run: confirm the app is a public client and that `http://localhost` is configured as a redirect URI.
+- Graph login is blocked for your own app registration: try leaving `MICROSOFT_CLIENT_ID` unset to use the Microsoft365R fallback client if your tenant already allows it.
 - Messages are skipped too often: reduce `filters.address_score_threshold` or relax alias/domain patterns.
 - Messages are still duplicated: confirm the SQLite database path is stable across runs and that dry-run mode is not being confused with real scans.
 

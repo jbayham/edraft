@@ -15,6 +15,7 @@ class MessageFilter:
         self.config = config
         self.identity = identity
         self._identity_tokens = self._build_identity_tokens(identity)
+        self._identity_aliases = self._build_identity_aliases(identity)
 
     def evaluate(self, message: MailboxMessage) -> FilterDecision:
         reasons: list[str] = []
@@ -96,8 +97,8 @@ class MessageFilter:
         return signals
 
     def _is_cc_only(self, message: MailboxMessage) -> bool:
-        in_to = any(recipient.matches(self.identity.email) for recipient in message.to_recipients)
-        in_cc = any(recipient.matches(self.identity.email) for recipient in message.cc_recipients)
+        in_to = any(self._recipient_match_type(recipient) != "none" for recipient in message.to_recipients)
+        in_cc = any(self._recipient_match_type(recipient) != "none" for recipient in message.cc_recipients)
         return in_cc and not in_to
 
     def _direct_address_score(
@@ -109,16 +110,22 @@ class MessageFilter:
         score = 0
         signals: list[str] = []
 
-        in_to = any(recipient.matches(self.identity.email) for recipient in message.to_recipients)
-        in_cc = any(recipient.matches(self.identity.email) for recipient in message.cc_recipients)
+        to_match = self._best_recipient_match_type(message.to_recipients)
+        cc_match = self._best_recipient_match_type(message.cc_recipients)
         recipient_count = len(message.to_recipients) + len(message.cc_recipients)
 
-        if in_to:
+        if to_match == "exact":
             score += 3
             signals.append("recipient:to")
-        elif in_cc:
+        elif to_match == "alias":
+            score += 2
+            signals.append("recipient:to_alias")
+        elif cc_match == "exact":
             score -= 3
             signals.append("recipient:cc")
+        elif cc_match == "alias":
+            score -= 3
+            signals.append("recipient:cc_alias")
         else:
             score -= 2
             signals.append("recipient:not_found")
@@ -126,8 +133,10 @@ class MessageFilter:
         if recipient_count <= self.config.max_direct_recipients:
             score += 1
             signals.append("recipient:few_total_recipients")
-        else:
+        elif to_match == "none":
             score -= 2
+            signals.append("recipient:many_total_recipients")
+        else:
             signals.append("recipient:many_total_recipients")
 
         salutation = self._find_direct_salutation(message)
@@ -181,3 +190,54 @@ class MessageFilter:
             tokens.add(local_part.casefold())
             tokens.update(part.casefold() for part in local_part.split() if part)
         return sorted(token for token in tokens if token)
+
+    @staticmethod
+    def _normalize_identifier(value: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", value.casefold())
+
+    def _best_recipient_match_type(self, recipients: list) -> str:
+        result = "none"
+        for recipient in recipients:
+            match_type = self._recipient_match_type(recipient)
+            if match_type == "exact":
+                return "exact"
+            if match_type == "alias":
+                result = "alias"
+        return result
+
+    def _recipient_match_type(self, recipient) -> str:
+        if recipient.matches(self.identity.email):
+            return "exact"
+        candidate_values = [recipient.name, recipient.address.split("@", 1)[0]]
+        for value in candidate_values:
+            normalized = self._normalize_identifier(value)
+            if normalized and normalized in self._identity_aliases:
+                return "alias"
+        return "none"
+
+    def _build_identity_aliases(self, identity: IdentityConfig) -> set[str]:
+        aliases = set()
+        local_part = identity.email.split("@", 1)[0]
+        parts = [self._normalize_identifier(part) for part in identity.name.split() if part]
+        first = parts[0] if parts else ""
+        last = parts[-1] if len(parts) >= 2 else ""
+
+        for value in {identity.name, local_part}:
+            normalized = self._normalize_identifier(value)
+            if normalized:
+                aliases.add(normalized)
+
+        if first:
+            aliases.add(first)
+        if last:
+            aliases.add(last)
+        if first and last:
+            aliases.update(
+                {
+                    f"{first}{last}",
+                    f"{first[:1]}{last}",
+                    f"{last}{first}",
+                    f"{last}{first[:1]}",
+                }
+            )
+        return {alias for alias in aliases if alias}

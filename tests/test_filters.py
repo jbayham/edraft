@@ -56,6 +56,24 @@ def test_directly_addressed_message_is_eligible() -> None:
     assert decision.score >= 2
 
 
+def test_alias_address_in_to_recognizes_identity() -> None:
+    identity = IdentityConfig(name="Jude Bayham", email="jbayham@colostate.edu")
+    message = MailboxMessage(
+        id="msg-1",
+        conversation_id="conv-1",
+        subject="Hello",
+        from_recipient=Recipient(name="Sender", address="person@example.com"),
+        to_recipients=[Recipient(name="Bayham,Jude", address="jude.bayham@colostate.edu")],
+        cc_recipients=[],
+        body_content="<p>Can you take a look?</p>",
+        body_content_type="html",
+        headers={},
+    )
+    decision = MessageFilter(FilterConfig(), identity).evaluate(message)
+    assert decision.should_draft
+    assert "recipient:to_alias" in decision.matched_signals
+
+
 def test_group_broadcast_without_salutation_is_skipped() -> None:
     message = make_message(
         to=["jude@example.com", "alex@example.com", "sam@example.com", "taylor@example.com", "team@example.com"],

@@ -10,6 +10,9 @@ import msal
 # MSAL reserves OIDC scopes such as offline_access and adds them as needed.
 # Request only the Graph scopes the app actually needs here.
 GRAPH_SCOPES = ["User.Read", "Mail.ReadWrite"]
+# Microsoft365R's published default public-client app registration.
+# edraft still requests only GRAPH_SCOPES above, so Mail.Send is not requested.
+DEFAULT_PUBLIC_CLIENT_ID = "d44a05d5-c6a5-4bbb-82d2-443123722380"
 
 
 class AuthConfigurationError(RuntimeError):
@@ -34,15 +37,14 @@ class AuthSettings:
 
 def load_auth_settings() -> AuthSettings:
     tenant_id = os.getenv("MICROSOFT_TENANT_ID", "").strip()
-    client_id = os.getenv("MICROSOFT_CLIENT_ID", "").strip()
+    client_id = os.getenv("MICROSOFT_CLIENT_ID", "").strip() or DEFAULT_PUBLIC_CLIENT_ID
     token_cache_path = Path(
         os.getenv("EDRAFT_TOKEN_CACHE_PATH", "./data/msal_token_cache.bin")
     ).expanduser()
     redirect_port = int(os.getenv("EDRAFT_REDIRECT_PORT", "8765"))
-    if not tenant_id or not client_id:
+    if not tenant_id:
         raise AuthConfigurationError(
-            "MICROSOFT_TENANT_ID and MICROSOFT_CLIENT_ID must be set in your environment "
-            "or .env file."
+            "MICROSOFT_TENANT_ID must be set in your environment or .env file."
         )
     return AuthSettings(
         tenant_id=tenant_id,

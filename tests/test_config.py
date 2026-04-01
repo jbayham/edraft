@@ -12,8 +12,10 @@ def test_parse_app_config_with_defaults(tmp_path: Path) -> None:
         source_path=tmp_path / "edraft.toml",
     )
     assert config.identity.email == "jude@example.com"
-    assert config.scan.reply_mode == "reply"
+    assert config.scan.reply_mode == "auto"
     assert config.filters.address_score_threshold == 2
+    assert config.llm.model == "gpt-5.4"
+    assert config.llm.reasoning_effort == "medium"
 
 
 def test_load_app_config_reads_toml_file(tmp_path: Path) -> None:

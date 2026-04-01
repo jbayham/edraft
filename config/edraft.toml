@@ -5,9 +5,9 @@ email = "jbayham@colostate.edu"
 [scan]
 folders = ["inbox"]
 scan_unread_only = true
-max_messages_per_scan = 25
+max_messages_per_scan = 5
 thread_context_messages = 5
-reply_mode = "reply"
+reply_mode = "auto"
 dry_run = false
 processed_category = ""
 apply_processed_category = false
@@ -41,9 +41,10 @@ address_score_threshold = 2
 
 [llm]
 provider = "openai"
-model = "gpt-4o-mini"
-style_instructions = "Write concise, professional replies. Prefer short responses unless more detail is clearly needed. Do not invent facts, do not over-commit, and ask a clarifying question if context is insufficient."
-signature_block = "Best,\nYour Name"
+model = "gpt-5.4"
+reasoning_effort = "medium"
+style_instructions = "Write concise, professional replies. Prefer short responses unless more detail is clearly needed. Do not invent facts, do not over-commit, and ask a clarifying question if context is insufficient. Avoid mdash and other common AI writing tells."
+signature_block = "Thanks,\nJude"
 max_input_chars = 12000
 
 [state]
