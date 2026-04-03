@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from edraft.config import (
@@ -19,8 +19,17 @@ class FakeGraphClient:
     def __init__(self, message: MailboxMessage) -> None:
         self.message = message
         self.created = 0
+        self.last_received_after: datetime | None = None
 
-    def list_messages(self, *, folder: str, unread_only: bool, limit: int) -> list[MailboxMessage]:
+    def list_messages(
+        self,
+        *,
+        folder: str,
+        unread_only: bool,
+        limit: int,
+        received_after: datetime | None = None,
+    ) -> list[MailboxMessage]:
+        self.last_received_after = received_after
         return [self.message]
 
     def get_message(self, message_id: str) -> MailboxMessage:
@@ -98,3 +107,6 @@ def test_scanner_skips_duplicate_message(tmp_path: Path) -> None:
     assert report.skipped == 1
     assert report.drafted == 0
     assert graph_client.created == 0
+    assert graph_client.last_received_after is not None
+    expected_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    assert abs((graph_client.last_received_after - expected_cutoff).total_seconds()) < 5

@@ -14,6 +14,7 @@ That is a hard constraint in this repo:
 
 - Authenticates to Microsoft 365 with delegated Microsoft Graph permissions for a single local user.
 - Reads unread messages from configured mail folders, defaulting to `Inbox`.
+- Limits draft candidates to unread messages received within the configured age window, defaulting to the last 24 hours.
 - Fetches full message details plus recent conversation context.
 - Applies conservative heuristics to skip newsletters, automated mail, CC-only messages, and broad distribution mail that does not appear to be directly addressed to you.
 - Generates a concise reply draft with an LLM.
@@ -111,6 +112,7 @@ Important config fields:
 - `identity.email`
 - `scan.folders`
 - `scan.scan_unread_only`
+- `scan.max_message_age_hours`
 - `scan.max_messages_per_scan`
 - `scan.thread_context_messages`
 - `scan.reply_mode`

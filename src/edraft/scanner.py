@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 
 from edraft.config import AppConfig
 from edraft.draft_creator import DraftCreator
@@ -46,10 +47,14 @@ class InboxScanner:
     def scan_once(self, *, dry_run: bool | None = None) -> ScanReport:
         effective_dry_run = self.config.scan.dry_run if dry_run is None else dry_run
         report = ScanReport()
+        received_after = datetime.now(timezone.utc) - timedelta(
+            hours=self.config.scan.max_message_age_hours
+        )
         summaries = self.fetcher.fetch_unread_messages(
             folders=self.config.scan.folders,
             unread_only=self.config.scan.scan_unread_only,
             max_messages=self.config.scan.max_messages_per_scan,
+            received_after=received_after,
         )
         for summary in summaries:
             report.examined += 1

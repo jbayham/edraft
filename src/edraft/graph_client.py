@@ -44,9 +44,11 @@ class GraphClient:
         folder: str,
         unread_only: bool,
         limit: int,
+        received_after: datetime | None = None,
     ) -> list[MailboxMessage]:
         params = {
             "$top": min(limit, 100),
+            "$orderby": "receivedDateTime desc",
             "$select": ",".join(
                 [
                     "id",
@@ -64,8 +66,14 @@ class GraphClient:
                 ]
             ),
         }
+        filters: list[str] = []
         if unread_only:
-            params["$filter"] = "isRead eq false"
+            filters.append("isRead eq false")
+        if received_after is not None:
+            cutoff = received_after.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            filters.append(f"receivedDateTime ge {cutoff}")
+        if filters:
+            params["$filter"] = " and ".join(filters)
         messages: list[MailboxMessage] = []
         next_url: str | None = f"{self.BASE_URL}/me/mailFolders/{urllib.parse.quote(folder)}/messages"
         while next_url and len(messages) < limit:

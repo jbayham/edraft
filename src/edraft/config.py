@@ -26,6 +26,7 @@ class IdentityConfig:
 class ScanConfig:
     folders: list[str] = field(default_factory=lambda: ["inbox"])
     scan_unread_only: bool = True
+    max_message_age_hours: int = 24
     max_messages_per_scan: int = 25
     thread_context_messages: int = 5
     reply_mode: str = "auto"
@@ -140,6 +141,7 @@ def parse_app_config(raw: dict[str, Any], source_path: Path) -> AppConfig:
     scan = ScanConfig(
         folders=_coerce_list(scan_raw.get("folders", ["inbox"]), "scan.folders") or ["inbox"],
         scan_unread_only=bool(scan_raw.get("scan_unread_only", True)),
+        max_message_age_hours=int(scan_raw.get("max_message_age_hours", 24)),
         max_messages_per_scan=int(scan_raw.get("max_messages_per_scan", 25)),
         thread_context_messages=int(scan_raw.get("thread_context_messages", 5)),
         reply_mode=reply_mode,
@@ -147,6 +149,8 @@ def parse_app_config(raw: dict[str, Any], source_path: Path) -> AppConfig:
         processed_category=processed_category,
         apply_processed_category=bool(scan_raw.get("apply_processed_category", False)),
     )
+    if scan.max_message_age_hours <= 0:
+        raise ConfigError("scan.max_message_age_hours must be greater than 0")
 
     filter_raw = raw.get("filters", {})
     filters = FilterConfig(

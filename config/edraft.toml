@@ -5,6 +5,7 @@ email = "jbayham@colostate.edu"
 [scan]
 folders = ["inbox"]
 scan_unread_only = true
+max_message_age_hours = 24
 max_messages_per_scan = 5
 thread_context_messages = 5
 reply_mode = "auto"

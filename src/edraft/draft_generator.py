@@ -151,4 +151,67 @@ class DraftGenerator:
     def _with_signature(self, body: str) -> str:
         if not self.config.signature_block:
             return body
-        return f"{body.rstrip()}\n\n{self.config.signature_block.strip()}"
+        signature = self.config.signature_block.strip()
+        cleaned_body = self._strip_trailing_signoff(body.rstrip(), signature)
+        if not cleaned_body:
+            return signature
+        return f"{cleaned_body}\n\n{signature}"
+
+    def _strip_trailing_signoff(self, body: str, signature: str) -> str:
+        lines = body.splitlines()
+        signature_lines = [line.strip() for line in signature.splitlines() if line.strip()]
+
+        while lines:
+            while lines and not lines[-1].strip():
+                lines.pop()
+            if not lines:
+                break
+            if self._tail_matches_signature(lines, signature_lines):
+                del lines[-len(signature_lines) :]
+                continue
+            if len(lines) >= 2 and self._is_self_signoff_block(lines[-2:]):
+                del lines[-2:]
+                continue
+            if self._is_self_name_line(lines[-1]):
+                lines.pop()
+                continue
+            break
+
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return "\n".join(lines).strip()
+
+    def _tail_matches_signature(self, lines: list[str], signature_lines: list[str]) -> bool:
+        if not signature_lines or len(lines) < len(signature_lines):
+            return False
+        tail = [line.strip().casefold() for line in lines[-len(signature_lines) :]]
+        return tail == [line.casefold() for line in signature_lines]
+
+    def _is_self_signoff_block(self, lines: list[str]) -> bool:
+        if len(lines) != 2:
+            return False
+        closing = lines[0].strip().casefold()
+        return closing in {
+            "thanks",
+            "thanks,",
+            "thank you",
+            "thank you,",
+            "best",
+            "best,",
+            "regards",
+            "regards,",
+            "sincerely",
+            "sincerely,",
+        } and self._is_self_name_line(lines[1])
+
+    def _is_self_name_line(self, line: str) -> bool:
+        normalized = re.sub(r"[^a-z0-9]+", " ", line.casefold()).strip()
+        if not normalized:
+            return False
+
+        name_variants = {
+            re.sub(r"[^a-z0-9]+", " ", self.identity.name.casefold()).strip(),
+            re.sub(r"[^a-z0-9]+", " ", self.identity.email.split("@", 1)[0].casefold()).strip(),
+        }
+        name_variants.update(part for part in name_variants.copy() for part in part.split() if part)
+        return normalized in {variant for variant in name_variants if variant}

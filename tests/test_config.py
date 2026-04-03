@@ -13,6 +13,7 @@ def test_parse_app_config_with_defaults(tmp_path: Path) -> None:
     )
     assert config.identity.email == "jude@example.com"
     assert config.scan.reply_mode == "auto"
+    assert config.scan.max_message_age_hours == 24
     assert config.filters.address_score_threshold == 2
     assert config.llm.model == "gpt-5.4"
     assert config.llm.reasoning_effort == "medium"
@@ -27,6 +28,7 @@ name = "Jude Bayham"
 email = "jude@example.com"
 
 [scan]
+max_message_age_hours = 12
 reply_mode = "reply_all"
 
 [state]
@@ -35,3 +37,4 @@ database_path = "./state.sqlite3"
     )
     config = load_app_config(config_path)
     assert config.scan.reply_mode == "reply_all"
+    assert config.scan.max_message_age_hours == 12

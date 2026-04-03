@@ -36,6 +36,30 @@ def test_finalize_body_strips_subject_and_formats_lists() -> None:
     assert output.endswith("Thanks,\nJude")
 
 
+def test_finalize_body_removes_duplicate_self_name_before_signature() -> None:
+    generator = DraftGenerator(
+        LLMConfig(signature_block="Thanks,\nJude"),
+        IdentityConfig(name="Jude Bayham", email="jbayham@colostate.edu"),
+        client=DummyClient(),
+    )
+
+    output = generator._finalize_body("Sounds good.\n\nJude")
+
+    assert output == "Sounds good.\n\nThanks,\nJude"
+
+
+def test_finalize_body_collapses_existing_signature_to_single_configured_signoff() -> None:
+    generator = DraftGenerator(
+        LLMConfig(signature_block="Thanks,\nJude"),
+        IdentityConfig(name="Jude Bayham", email="jbayham@colostate.edu"),
+        client=DummyClient(),
+    )
+
+    output = generator._finalize_body("Sounds good.\n\nBest,\nJude Bayham")
+
+    assert output == "Sounds good.\n\nThanks,\nJude"
+
+
 def test_generate_passes_reasoning_effort() -> None:
     client = CapturingClient()
     generator = DraftGenerator(

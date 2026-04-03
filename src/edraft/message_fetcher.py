@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from edraft.graph_client import GraphClient
 from edraft.models import MailboxMessage
 
@@ -20,6 +22,7 @@ class MessageFetcher:
         folders: list[str],
         unread_only: bool,
         max_messages: int,
+        received_after: datetime | None = None,
     ) -> list[MailboxMessage]:
         results: list[MailboxMessage] = []
         for folder in folders:
@@ -30,10 +33,15 @@ class MessageFetcher:
                 folder=folder,
                 unread_only=unread_only,
                 limit=remaining,
+                received_after=received_after,
             )
             for message in messages:
                 if self.processed_category and any(
                     category.casefold() == self.processed_category for category in message.categories
+                ):
+                    continue
+                if received_after and (
+                    message.received_at is None or message.received_at < received_after
                 ):
                     continue
                 results.append(message)
