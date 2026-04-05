@@ -6,9 +6,10 @@ import re
 from datetime import datetime, timedelta, timezone
 from statistics import mean
 from typing import Any
+from uuid import uuid4
 
 from edraft.config import StyleCorpusConfig
-from edraft.draft_generator import DraftGenerationError, DraftGenerator
+from edraft.draft_generator import DraftGenerationError, DraftGenerator, DraftPrompt
 from edraft.models import MailboxMessage, Recipient, ThreadContext
 from edraft.style_corpus import StyleCorpusStore, StyleExampleRetriever
 
@@ -37,7 +38,12 @@ class StyleEvaluator:
         self.store = store
         self.retriever = retriever
 
-    def evaluate(self, *, limit: int | None = None) -> dict[str, Any]:
+    def evaluate(
+        self,
+        *,
+        limit: int | None = None,
+        include_prompts: bool = False,
+    ) -> dict[str, Any]:
         case_limit = limit or self.config.eval_max_cases
         holdout_count = self.store.refresh_eval_holdout(
             holdout_days=self.config.eval_holdout_days,
@@ -53,6 +59,7 @@ class StyleEvaluator:
             }
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=self.config.eval_holdout_days)
+        run_id = f"style-eval-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}"
         results = []
         for case in cases:
             inbound_message = MailboxMessage(
@@ -74,15 +81,37 @@ class StyleEvaluator:
                 exclude_reply_ids=(case.reply_message_id,),
                 reply_received_before=cutoff,
             )
-            generated_reply = self.generator.generate(
+            generated_reply, generation_prompt = self.generator.generate_with_prompt(
                 inbound_message,
                 thread_context,
                 style_examples,
             )
-            grade = self._grade_case(
+            grade, grading_prompt = self._grade_case(
                 inbound_text=case.inbound_text,
                 generated_reply=generated_reply,
                 actual_reply=case.actual_reply_text,
+            )
+            style_example_ids = [example.reply_message_id for example in style_examples]
+            self.store.record_eval_result(
+                run_id=run_id,
+                reply_message_id=case.reply_message_id,
+                correspondent_email=case.correspondent_email,
+                subject=case.subject,
+                generated_reply=generated_reply,
+                actual_reply=case.actual_reply_text,
+                style_example_ids=style_example_ids,
+                generation_system_prompt=generation_prompt.system,
+                generation_user_prompt=generation_prompt.user,
+                grading_system_prompt=grading_prompt.system,
+                grading_user_prompt=grading_prompt.user,
+                tone_match=grade.tone_match,
+                brevity_match=grade.brevity_match,
+                commitment_safety=grade.commitment_safety,
+                clarity=grade.clarity,
+                overall=grade.overall,
+                notes=grade.notes,
+                model=self.generator.config.model,
+                reasoning_effort=self.generator.config.reasoning_effort,
             )
             results.append(
                 {
@@ -91,24 +120,36 @@ class StyleEvaluator:
                     "subject": case.subject,
                     "generated_reply": generated_reply,
                     "actual_reply": case.actual_reply_text,
-                    "style_example_ids": [example.reply_message_id for example in style_examples],
+                    "style_example_ids": style_example_ids,
                     "grade": asdict(grade),
                 }
             )
+            if include_prompts:
+                results[-1]["generation_prompt"] = asdict(generation_prompt)
+                results[-1]["grading_prompt"] = asdict(grading_prompt)
 
         averages = {
             metric: round(mean(item["grade"][metric] for item in results), 2)
             for metric in ["tone_match", "brevity_match", "commitment_safety", "clarity", "overall"]
         }
         return {
+            "run_id": run_id,
             "holdout_cases": holdout_count,
             "evaluated_cases": len(results),
             "averages": averages,
             "cases": results,
         }
 
-    def _grade_case(self, *, inbound_text: str, generated_reply: str, actual_reply: str) -> StyleEvalGrade:
-        prompt = "\n".join(
+    def _grade_case(
+        self,
+        *,
+        inbound_text: str,
+        generated_reply: str,
+        actual_reply: str,
+    ) -> tuple[StyleEvalGrade, DraftPrompt]:
+        prompt = DraftPrompt(
+            system="You are a strict email style grader. Return JSON only.",
+            user="\n".join(
             [
                 "You grade whether a generated email reply matches the author's real reply style.",
                 "Score each dimension from 1 to 5.",
@@ -124,12 +165,13 @@ class StyleEvaluator:
                 "Actual reply:",
                 actual_reply,
             ]
+            ),
         )
         request_kwargs = {
             "model": self.generator.config.model,
             "input": [
-                {"role": "system", "content": "You are a strict email style grader. Return JSON only."},
-                {"role": "user", "content": prompt},
+                {"role": "system", "content": prompt.system},
+                {"role": "user", "content": prompt.user},
             ],
             "store": False,
         }
@@ -147,7 +189,7 @@ class StyleEvaluator:
             clarity=int(payload["clarity"]),
             overall=int(payload["overall"]),
             notes=str(payload.get("notes", "")).strip(),
-        )
+        ), prompt
 
 
 def _parse_json_output(raw: str) -> dict[str, Any]:

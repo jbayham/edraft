@@ -1,8 +1,10 @@
+import sqlite3
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from edraft.config import StyleCorpusConfig
+from edraft.draft_generator import DraftPrompt
 from edraft.models import MailboxMessage, Recipient
 from edraft.style_corpus import StyleCorpusStore, StyleExampleRetriever
 from edraft.style_eval import StyleEvaluator
@@ -43,6 +45,16 @@ class FakeGenerator:
     def __init__(self) -> None:
         self.config = SimpleNamespace(model="gpt-5.4", reasoning_effort="medium")
         self.client = SimpleNamespace(responses=FakeResponses())
+
+    def build_prompt(self, message, thread_context, style_examples=None) -> DraftPrompt:
+        return DraftPrompt(system="draft system prompt", user="draft user prompt")
+
+    def generate_with_prompt(self, message, thread_context, style_examples=None):
+        return "Thanks,\n\nI can send an update tomorrow.\n\nThanks,\nJude", self.build_prompt(
+            message,
+            thread_context,
+            style_examples,
+        )
 
     def generate(self, message, thread_context, style_examples=None) -> str:
         return "Thanks,\n\nI can send an update tomorrow.\n\nThanks,\nJude"
@@ -106,8 +118,41 @@ def test_style_evaluator_scores_held_out_cases(tmp_path: Path) -> None:
         retriever=StyleExampleRetriever(store, config),
     )
 
-    report = evaluator.evaluate(limit=1)
+    report = evaluator.evaluate(limit=1, include_prompts=True)
 
+    assert report["run_id"].startswith("style-eval-")
     assert report["evaluated_cases"] == 1
     assert report["averages"]["overall"] == 4
     assert report["cases"][0]["style_example_ids"] == ["out-old"]
+    assert report["cases"][0]["generation_prompt"]["system"] == "draft system prompt"
+    assert report["cases"][0]["grading_prompt"]["system"] == "You are a strict email style grader. Return JSON only."
+
+    connection = sqlite3.connect(tmp_path / "edraft.sqlite3")
+    connection.row_factory = sqlite3.Row
+    try:
+        row = connection.execute(
+            """
+            SELECT
+                run_id,
+                reply_message_id,
+                generation_system_prompt,
+                generation_user_prompt,
+                grading_system_prompt,
+                tone_match,
+                overall
+            FROM style_eval_results
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert row is not None
+    assert row["run_id"] == report["run_id"]
+    assert row["reply_message_id"] == "out-holdout"
+    assert row["generation_system_prompt"] == "draft system prompt"
+    assert row["generation_user_prompt"] == "draft user prompt"
+    assert row["grading_system_prompt"] == "You are a strict email style grader. Return JSON only."
+    assert row["tone_match"] == 4
+    assert row["overall"] == 4

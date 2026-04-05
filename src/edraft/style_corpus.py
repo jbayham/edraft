@@ -36,6 +36,9 @@ STOPWORDS = {
     "your",
 }
 
+REPLY_SUBJECT_PREFIXES = ("re:", "aw:", "sv:")
+REPLY_HEADER_NAMES = {"in-reply-to", "references"}
+
 
 @dataclass(slots=True)
 class StylePairRecord:
@@ -146,6 +149,45 @@ class StyleCorpusStore:
                     split TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS style_eval_results (
+                    eval_result_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    reply_message_id TEXT NOT NULL,
+                    correspondent_email TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    generated_reply TEXT NOT NULL,
+                    actual_reply TEXT NOT NULL,
+                    style_example_ids TEXT NOT NULL,
+                    generation_system_prompt TEXT NOT NULL,
+                    generation_user_prompt TEXT NOT NULL,
+                    grading_system_prompt TEXT NOT NULL,
+                    grading_user_prompt TEXT NOT NULL,
+                    tone_match INTEGER NOT NULL,
+                    brevity_match INTEGER NOT NULL,
+                    commitment_safety INTEGER NOT NULL,
+                    clarity INTEGER NOT NULL,
+                    overall INTEGER NOT NULL,
+                    notes TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    reasoning_effort TEXT,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_style_eval_results_run
+                ON style_eval_results(run_id, updated_at DESC)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_style_eval_results_reply
+                ON style_eval_results(reply_message_id, updated_at DESC)
                 """
             )
             connection.execute(
@@ -442,6 +484,80 @@ class StyleCorpusStore:
             ).fetchall()
         return [StyleEvalCase(**dict(row)) for row in rows]
 
+    def record_eval_result(
+        self,
+        *,
+        run_id: str,
+        reply_message_id: str,
+        correspondent_email: str,
+        subject: str,
+        generated_reply: str,
+        actual_reply: str,
+        style_example_ids: Sequence[str],
+        generation_system_prompt: str,
+        generation_user_prompt: str,
+        grading_system_prompt: str,
+        grading_user_prompt: str,
+        tone_match: int,
+        brevity_match: int,
+        commitment_safety: int,
+        clarity: int,
+        overall: int,
+        notes: str,
+        model: str,
+        reasoning_effort: str | None,
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO style_eval_results (
+                    run_id,
+                    reply_message_id,
+                    correspondent_email,
+                    subject,
+                    generated_reply,
+                    actual_reply,
+                    style_example_ids,
+                    generation_system_prompt,
+                    generation_user_prompt,
+                    grading_system_prompt,
+                    grading_user_prompt,
+                    tone_match,
+                    brevity_match,
+                    commitment_safety,
+                    clarity,
+                    overall,
+                    notes,
+                    model,
+                    reasoning_effort,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    reply_message_id,
+                    correspondent_email,
+                    subject,
+                    generated_reply,
+                    actual_reply,
+                    json.dumps(list(style_example_ids)),
+                    generation_system_prompt,
+                    generation_user_prompt,
+                    grading_system_prompt,
+                    grading_user_prompt,
+                    tone_match,
+                    brevity_match,
+                    commitment_safety,
+                    clarity,
+                    overall,
+                    notes,
+                    model,
+                    reasoning_effort,
+                    now,
+                ),
+            )
+
 
 class StyleCorpusSyncer:
     def __init__(
@@ -466,13 +582,12 @@ class StyleCorpusSyncer:
             remaining = self.config.sync_max_messages - report.scanned
             if remaining <= 0:
                 break
-            messages = self.graph_client.list_messages(
+            for message in self.graph_client.iter_messages(
                 folder=folder,
                 unread_only=False,
                 limit=remaining,
                 include_body=True,
-            )
-            for message in messages:
+            ):
                 report.scanned += 1
                 try:
                     if not self._is_candidate_reply(message, folder):
@@ -530,7 +645,13 @@ class StyleCorpusSyncer:
         if message.is_draft or not message.received_at:
             return False
         if folder.casefold() == "sentitems":
-            return True
+            if not message.all_recipients():
+                return False
+            if self._has_reply_headers(message):
+                return True
+            if self._has_reply_subject(message):
+                return True
+            return self._has_quoted_reply_markers(message)
         sender = message.sender_address
         if not sender:
             return False
@@ -538,6 +659,33 @@ class StyleCorpusSyncer:
             return True
         normalized = self._normalize_identifier(sender.split("@", 1)[0])
         return normalized in self._identity_aliases
+
+    @staticmethod
+    def _has_reply_headers(message: MailboxMessage) -> bool:
+        return any(name in message.headers for name in REPLY_HEADER_NAMES)
+
+    @staticmethod
+    def _has_reply_subject(message: MailboxMessage) -> bool:
+        subject = message.subject.casefold().strip()
+        return subject.startswith(REPLY_SUBJECT_PREFIXES)
+
+    @staticmethod
+    def _has_quoted_reply_markers(message: MailboxMessage) -> bool:
+        content = (message.body_content or "").casefold()
+        if not content:
+            return False
+        markers = (
+            "divrplyfwdmsg",
+            "-----original message-----",
+            "get outlook for ios",
+            "get outlook for android",
+            "sent from my iphone",
+        )
+        if any(marker in content for marker in markers):
+            return True
+        if " on " in content and " wrote:" in content:
+            return True
+        return "from:" in content and "sent:" in content
 
     def _find_prior_inbound_message(self, reply_message: MailboxMessage) -> MailboxMessage | None:
         if not reply_message.conversation_id or not reply_message.received_at:

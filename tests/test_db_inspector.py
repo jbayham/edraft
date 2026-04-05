@@ -99,3 +99,47 @@ def test_database_inspector_rejects_unknown_table(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         inspector.inspect_table("not_a_table", limit=5)
+
+
+def test_database_inspector_corpus_stats_reports_style_corpus_metrics(tmp_path: Path) -> None:
+    database_path = tmp_path / "edraft.sqlite3"
+    style_store = StyleCorpusStore(database_path)
+    style_store.upsert_pair(
+        inbound_message=_message(
+            "in-1",
+            sender="alex@example.com",
+            recipients=["jude@example.com"],
+            subject="Timeline",
+            body="Can you share the revised timeline?",
+        ),
+        reply_message=_message(
+            "out-1",
+            sender="jude@example.com",
+            recipients=["alex@example.com"],
+            subject="Re: Timeline",
+            body="I should have the revised timeline tomorrow.",
+        ),
+        correspondent_email="alex@example.com",
+        pairing_source="test",
+        pairing_confidence=1.0,
+    )
+
+    inspector = DatabaseInspector(database_path)
+    payload = inspector.corpus_stats()
+
+    assert payload["style_corpus_available"] is True
+    assert payload["style_corpus"]["pair_count"] == 1
+    assert payload["style_corpus"]["correspondent_count"] == 1
+    assert payload["style_corpus"]["message_archive"]["message_count"] == 0
+    assert payload["style_corpus"]["eval_holdout"]["holdout_case_count"] == 0
+    assert payload["style_corpus"]["text_volume"]["total_text_chars"] > 0
+    assert payload["style_corpus"]["top_correspondents"][0]["correspondent_email"] == "alex@example.com"
+
+
+def test_database_inspector_corpus_stats_handles_missing_style_tables(tmp_path: Path) -> None:
+    inspector = DatabaseInspector(tmp_path / "edraft.sqlite3")
+
+    payload = inspector.corpus_stats()
+
+    assert payload["style_corpus_available"] is False
+    assert payload["style_corpus"] is None

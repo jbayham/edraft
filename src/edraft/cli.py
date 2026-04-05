@@ -152,6 +152,13 @@ def corpus_sync(
 def eval_style(
     config_path: Annotated[Path | None, _config_option()] = None,
     limit: Annotated[int | None, typer.Option("--limit", min=1, help="Maximum eval cases.")] = None,
+    include_prompts: Annotated[
+        bool,
+        typer.Option(
+            "--include-prompts",
+            help="Include generation and grading prompts in the JSON output.",
+        ),
+    ] = False,
 ) -> None:
     """Evaluate style match against held-out real replies from the local corpus."""
     config, graph_client, scanner, style_store = build_components(config_path, require_llm=True)
@@ -166,7 +173,7 @@ def eval_style(
             store=style_store,
             retriever=retriever,
         )
-        payload = evaluator.evaluate(limit=limit)
+        payload = evaluator.evaluate(limit=limit, include_prompts=include_prompts)
     finally:
         graph_client.close()
     typer.echo(json.dumps(payload, indent=2))
@@ -189,3 +196,13 @@ def db_inspect(
     inspector = DatabaseInspector(config.state.database_path)
     payload = inspector.inspect_table(table, limit=limit) if table else inspector.summary()
     typer.echo(json.dumps(payload, indent=2))
+
+
+@app.command("corpus-stats")
+def corpus_stats(
+    config_path: Annotated[Path | None, _config_option()] = None,
+) -> None:
+    """Show high-level statistics for the local style corpus."""
+    config = load_app_config(config_path)
+    inspector = DatabaseInspector(config.state.database_path)
+    typer.echo(json.dumps(inspector.corpus_stats(), indent=2))

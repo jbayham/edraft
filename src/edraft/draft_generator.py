@@ -46,7 +46,19 @@ class DraftGenerator:
         thread_context: ThreadContext,
         style_examples: list[StyleExample] | None = None,
     ) -> str:
+        body, _ = self.generate_with_prompt(message, thread_context, style_examples)
+        return body
+
+    def generate_with_prompt(
+        self,
+        message: MailboxMessage,
+        thread_context: ThreadContext,
+        style_examples: list[StyleExample] | None = None,
+    ) -> tuple[str, DraftPrompt]:
         prompt = self.build_prompt(message, thread_context, style_examples=style_examples)
+        return self.generate_from_prompt(prompt), prompt
+
+    def generate_from_prompt(self, prompt: DraftPrompt) -> str:
         try:
             request_kwargs = {
                 "model": self.config.model,

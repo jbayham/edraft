@@ -197,6 +197,20 @@ This runs held-out cases from the local corpus, generates drafts, and grades the
 edraft eval-style --limit 5
 ```
 
+To include the exact generation and grading prompts in the JSON output:
+
+```bash
+edraft eval-style --limit 1 --include-prompts
+```
+
+### Show style corpus statistics
+
+This reads the local SQLite database and summarizes corpus size, date coverage, correspondents, and text volume.
+
+```bash
+edraft corpus-stats
+```
+
 ### Inspect the local SQLite database
 
 This reads the local `edraft` database only. It does not contact Microsoft Graph.
@@ -271,8 +285,9 @@ The same SQLite file also stores the optional style corpus in separate tables fo
 - inbound/reply pairs
 - full-text search data
 - held-out eval selections
+- saved eval case results, including prompts, generated replies, actual replies, and grades
 
-The `edraft db-inspect` command can show a summary of those tables or dump rows from one table as JSON.
+The `edraft corpus-stats` command shows high-level style corpus metrics, and `edraft db-inspect` can show a summary of all tables or dump rows from one table as JSON.
 
 ## Logging
 

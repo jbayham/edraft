@@ -35,6 +35,17 @@ class FakeGraphClient:
         self.sent_messages = sent_messages
         self.conversations = conversations
 
+    def iter_messages(
+        self,
+        *,
+        folder: str,
+        unread_only: bool,
+        limit: int,
+        received_after=None,
+        include_body: bool = False,
+    ):
+        yield from self.sent_messages[:limit]
+
     def list_messages(
         self,
         *,
@@ -44,7 +55,15 @@ class FakeGraphClient:
         received_after=None,
         include_body: bool = False,
     ) -> list[MailboxMessage]:
-        return self.sent_messages[:limit]
+        return list(
+            self.iter_messages(
+                folder=folder,
+                unread_only=unread_only,
+                limit=limit,
+                received_after=received_after,
+                include_body=include_body,
+            )
+        )
 
     def list_conversation_messages(
         self,
@@ -103,6 +122,67 @@ def test_style_corpus_sync_pairs_sent_reply_with_prior_inbound(tmp_path: Path) -
     assert pairs[0].inbound_message_id == "in-1"
     assert "updated budget numbers" in pairs[0].inbound_text
     assert pairs[0].reply_text == "Yes, I can send those this afternoon.\nJude"
+
+
+def test_style_corpus_syncer_skips_non_reply_sent_items(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    non_reply = _message(
+        "out-non-reply",
+        sender="jude@example.com",
+        recipients=["alex@example.com"],
+        subject="New meeting idea",
+        body="Would Tuesday morning work for a quick meeting?",
+        received_at=now - timedelta(hours=1),
+    )
+    syncer = StyleCorpusSyncer(
+        FakeGraphClient([], {}),
+        StyleCorpusStore(tmp_path / "edraft.sqlite3"),
+        identity=IdentityConfig(name="Jude Bayham", email="jude@example.com"),
+        config=StyleCorpusConfig(sync_max_messages=10, min_reply_chars=10),
+    )
+
+    assert syncer._is_candidate_reply(non_reply, "sentitems") is False
+
+
+def test_style_corpus_syncer_accepts_reply_headers_in_sent_items(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    reply = _message(
+        "out-reply-header",
+        sender="jude@example.com",
+        recipients=["alex@example.com"],
+        subject="Budget question",
+        body="Yes, I can send those this afternoon.",
+        received_at=now - timedelta(hours=1),
+    )
+    reply.headers = {"in-reply-to": "<message-id@example.com>"}
+    syncer = StyleCorpusSyncer(
+        FakeGraphClient([], {}),
+        StyleCorpusStore(tmp_path / "edraft.sqlite3"),
+        identity=IdentityConfig(name="Jude Bayham", email="jude@example.com"),
+        config=StyleCorpusConfig(sync_max_messages=10, min_reply_chars=10),
+    )
+
+    assert syncer._is_candidate_reply(reply, "sentitems") is True
+
+
+def test_style_corpus_syncer_accepts_reply_markers_in_body(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    reply = _message(
+        "out-reply-body",
+        sender="jude@example.com",
+        recipients=["alex@example.com"],
+        subject="Budget question",
+        body="Yes, I can send those this afternoon.\n\nFrom:\nAlex <alex@example.com>\nSent:\nFriday",
+        received_at=now - timedelta(hours=1),
+    )
+    syncer = StyleCorpusSyncer(
+        FakeGraphClient([], {}),
+        StyleCorpusStore(tmp_path / "edraft.sqlite3"),
+        identity=IdentityConfig(name="Jude Bayham", email="jude@example.com"),
+        config=StyleCorpusConfig(sync_max_messages=10, min_reply_chars=10),
+    )
+
+    assert syncer._is_candidate_reply(reply, "sentitems") is True
 
 
 def test_style_retriever_prefers_same_sender_before_generic_matches(tmp_path: Path) -> None:

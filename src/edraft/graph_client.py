@@ -3,7 +3,7 @@ from __future__ import annotations
 import urllib.parse
 from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 
@@ -47,6 +47,25 @@ class GraphClient:
         received_after: datetime | None = None,
         include_body: bool = False,
     ) -> list[MailboxMessage]:
+        return list(
+            self.iter_messages(
+                folder=folder,
+                unread_only=unread_only,
+                limit=limit,
+                received_after=received_after,
+                include_body=include_body,
+            )
+        )
+
+    def iter_messages(
+        self,
+        *,
+        folder: str,
+        unread_only: bool,
+        limit: int,
+        received_after: datetime | None = None,
+        include_body: bool = False,
+    ) -> Iterator[MailboxMessage]:
         select_fields = [
             "id",
             "conversationId",
@@ -76,18 +95,18 @@ class GraphClient:
             filters.append(f"receivedDateTime ge {cutoff}")
         if filters:
             params["$filter"] = " and ".join(filters)
-        messages: list[MailboxMessage] = []
         next_url: str | None = f"{self.BASE_URL}/me/mailFolders/{urllib.parse.quote(folder)}/messages"
-        while next_url and len(messages) < limit:
+        yielded = 0
+        while next_url and yielded < limit:
             response = self._request("GET", next_url, params=params if next_url.startswith(self.BASE_URL) else None)
             payload = response.json()
             for item in payload.get("value", []):
-                messages.append(MailboxMessage.from_graph(item))
-                if len(messages) >= limit:
+                yield MailboxMessage.from_graph(item)
+                yielded += 1
+                if yielded >= limit:
                     break
             next_url = payload.get("@odata.nextLink")
             params = None
-        return messages
 
     def get_message(self, message_id: str) -> MailboxMessage:
         params = {
