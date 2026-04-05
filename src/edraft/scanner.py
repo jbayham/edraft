@@ -12,6 +12,7 @@ from edraft.graph_client import GraphClient
 from edraft.message_fetcher import MessageFetcher
 from edraft.models import MailboxMessage, ScanReport
 from edraft.state_store import StateStore
+from edraft.style_corpus import StyleExampleRetriever
 from edraft.thread_context import ThreadContextBuilder
 
 
@@ -23,11 +24,13 @@ class InboxScanner:
         graph_client: GraphClient,
         state_store: StateStore,
         draft_generator: DraftGenerator | None,
+        style_retriever: StyleExampleRetriever | None = None,
     ) -> None:
         self.config = config
         self.graph_client = graph_client
         self.state_store = state_store
         self.draft_generator = draft_generator
+        self.style_retriever = style_retriever
         self.filter = MessageFilter(config.filters, config.identity)
         self.fetcher = MessageFetcher(
             graph_client,
@@ -148,9 +151,14 @@ class InboxScanner:
             return
 
         context = self.thread_builder.build(message)
+        style_examples = (
+            self.style_retriever.retrieve(message, context)
+            if self.style_retriever is not None and self.config.style_corpus.enabled
+            else []
+        )
         if self.draft_generator is None:
             raise DraftGenerationError("Draft generator is not configured.")
-        draft_text = self.draft_generator.generate(message, context)
+        draft_text = self.draft_generator.generate(message, context, style_examples)
 
         if dry_run:
             report.drafted += 1
@@ -159,6 +167,7 @@ class InboxScanner:
                 extra={
                     "event": "draft_would_create",
                     "message_id": message.id,
+                    "style_example_ids": json.dumps([example.reply_message_id for example in style_examples]),
                     "preview": draft_text[:200],
                 },
             )
@@ -182,6 +191,7 @@ class InboxScanner:
                 "event": "draft_created",
                 "message_id": message.id,
                 "draft_id": draft.id,
+                "style_example_ids": json.dumps([example.reply_message_id for example in style_examples]),
                 "draft_web_link": draft.web_link,
             },
         )

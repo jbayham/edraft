@@ -63,6 +63,21 @@ class LLMConfig:
     max_input_chars: int = 12000
 
 
+@dataclass(slots=True)
+class StyleCorpusConfig:
+    enabled: bool = True
+    source_folders: list[str] = field(default_factory=lambda: ["sentitems"])
+    sync_max_messages: int = 250
+    retrieve_same_sender_first: bool = True
+    fts_fallback_enabled: bool = True
+    max_examples: int = 3
+    max_example_chars: int = 280
+    min_reply_chars: int = 40
+    min_pair_confidence: float = 0.6
+    eval_holdout_days: int = 30
+    eval_max_cases: int = 10
+
+
 DEFAULT_STYLE_INSTRUCTIONS = (
     "Write concise, professional replies. Prefer short responses unless "
     "more detail is clearly needed. Do not invent facts, ask a clarifying "
@@ -87,6 +102,7 @@ class AppConfig:
     scan: ScanConfig
     filters: FilterConfig
     llm: LLMConfig
+    style_corpus: StyleCorpusConfig
     state: StateConfig
     logging: LoggingConfig
     source_path: Path
@@ -183,6 +199,38 @@ def parse_app_config(raw: dict[str, Any], source_path: Path) -> AppConfig:
         max_input_chars=int(llm_raw.get("max_input_chars", 12000)),
     )
 
+    style_raw = raw.get("style_corpus", {})
+    style_corpus = StyleCorpusConfig(
+        enabled=bool(style_raw.get("enabled", True)),
+        source_folders=(
+            _coerce_list(style_raw.get("source_folders", ["sentitems"]), "style_corpus.source_folders")
+            or ["sentitems"]
+        ),
+        sync_max_messages=int(style_raw.get("sync_max_messages", 250)),
+        retrieve_same_sender_first=bool(style_raw.get("retrieve_same_sender_first", True)),
+        fts_fallback_enabled=bool(style_raw.get("fts_fallback_enabled", True)),
+        max_examples=int(style_raw.get("max_examples", 3)),
+        max_example_chars=int(style_raw.get("max_example_chars", 280)),
+        min_reply_chars=int(style_raw.get("min_reply_chars", 40)),
+        min_pair_confidence=float(style_raw.get("min_pair_confidence", 0.6)),
+        eval_holdout_days=int(style_raw.get("eval_holdout_days", 30)),
+        eval_max_cases=int(style_raw.get("eval_max_cases", 10)),
+    )
+    if style_corpus.sync_max_messages <= 0:
+        raise ConfigError("style_corpus.sync_max_messages must be greater than 0")
+    if style_corpus.max_examples <= 0:
+        raise ConfigError("style_corpus.max_examples must be greater than 0")
+    if style_corpus.max_example_chars <= 0:
+        raise ConfigError("style_corpus.max_example_chars must be greater than 0")
+    if style_corpus.min_reply_chars <= 0:
+        raise ConfigError("style_corpus.min_reply_chars must be greater than 0")
+    if not 0.0 <= style_corpus.min_pair_confidence <= 1.0:
+        raise ConfigError("style_corpus.min_pair_confidence must be between 0 and 1")
+    if style_corpus.eval_holdout_days <= 0:
+        raise ConfigError("style_corpus.eval_holdout_days must be greater than 0")
+    if style_corpus.eval_max_cases <= 0:
+        raise ConfigError("style_corpus.eval_max_cases must be greater than 0")
+
     state_raw = raw.get("state", {})
     database_raw = str(state_raw.get("database_path", "./data/edraft.sqlite3"))
     state = StateConfig(database_path=_resolve_path(database_raw, cwd=Path.cwd()))
@@ -198,6 +246,7 @@ def parse_app_config(raw: dict[str, Any], source_path: Path) -> AppConfig:
         scan=scan,
         filters=filters,
         llm=llm,
+        style_corpus=style_corpus,
         state=state,
         logging=logging,
         source_path=source_path,

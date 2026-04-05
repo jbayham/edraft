@@ -18,6 +18,7 @@ That is a hard constraint in this repo:
 - Fetches full message details plus recent conversation context.
 - Applies conservative heuristics to skip newsletters, automated mail, CC-only messages, and broad distribution mail that does not appear to be directly addressed to you.
 - Generates a concise reply draft with an LLM.
+- Can sync your historical sent replies into a local style corpus and retrieve similar past replies to improve tone.
 - Creates an Outlook reply draft in the existing thread using `createReply` or `createReplyAll`.
 - Tracks processed messages in a local SQLite database so hourly runs are idempotent.
 - Optionally tags source messages with an Outlook category after processing.
@@ -41,6 +42,8 @@ Core modules:
 - `src/edraft/draft_generator.py`: LLM prompt construction and draft generation.
 - `src/edraft/draft_creator.py`: reply-draft creation only.
 - `src/edraft/state_store.py`: SQLite state for idempotency.
+- `src/edraft/style_corpus.py`: local style-corpus sync, storage, and retrieval.
+- `src/edraft/style_eval.py`: held-out style evaluation workflow.
 - `src/edraft/scanner.py`: one-pass orchestration.
 - `src/edraft/cli.py`: CLI commands.
 
@@ -125,6 +128,12 @@ Important config fields:
 - `llm.model`
 - `llm.style_instructions`
 - `llm.signature_block`
+- `style_corpus.enabled`
+- `style_corpus.source_folders`
+- `style_corpus.sync_max_messages`
+- `style_corpus.max_examples`
+- `style_corpus.max_example_chars`
+- `style_corpus.eval_holdout_days`
 - `scan.dry_run`
 
 ## CLI
@@ -156,6 +165,38 @@ edraft inspect <message-id>
 ```
 
 This prints message details, thread context, filter decisions, and local state for debugging.
+
+### Sync the style corpus
+
+This builds a local corpus of inbound/sent reply pairs from your Outlook history. It does not send email.
+
+```bash
+edraft corpus-sync
+```
+
+### Evaluate style match
+
+This runs held-out cases from the local corpus, generates drafts, and grades them against your real replies.
+
+```bash
+edraft eval-style --limit 5
+```
+
+### Inspect the local SQLite database
+
+This reads the local `edraft` database only. It does not contact Microsoft Graph.
+
+Summary view:
+
+```bash
+edraft db-inspect
+```
+
+Inspect one table with rows:
+
+```bash
+edraft db-inspect --table style_reply_pairs --limit 20
+```
 
 ## Hourly Execution
 
@@ -209,6 +250,15 @@ Stored fields include:
 
 This prevents duplicate draft creation across hourly runs. By default, `drafted` and `skipped` are terminal actions; `error` records are retried on future runs.
 
+The same SQLite file also stores the optional style corpus in separate tables for:
+
+- archived message text used for style retrieval
+- inbound/reply pairs
+- full-text search data
+- held-out eval selections
+
+The `edraft db-inspect` command can show a summary of those tables or dump rows from one table as JSON.
+
 ## Logging
 
 Logs are emitted in JSON by default and include:
@@ -233,6 +283,8 @@ The tests mock Graph and LLM boundaries and cover:
 - duplicate prevention
 - config loading
 - reply-draft endpoint usage without send behavior
+- style corpus sync and retrieval
+- held-out style evaluation
 
 ## Troubleshooting
 
@@ -240,6 +292,7 @@ The tests mock Graph and LLM boundaries and cover:
 - Graph login fails on first run: confirm the app is a public client and that `http://localhost` is configured as a redirect URI.
 - Graph login is blocked for your own app registration: try leaving `MICROSOFT_CLIENT_ID` unset to use the Microsoft365R fallback client if your tenant already allows it.
 - Messages are skipped too often: reduce `filters.address_score_threshold` or relax alias/domain patterns.
+- Style retrieval is weak: run `edraft corpus-sync` again after you have more real sent replies, or raise `style_corpus.sync_max_messages`.
 - Messages are still duplicated: confirm the SQLite database path is stable across runs and that dry-run mode is not being confused with real scans.
 
 ## Relevant Documentation

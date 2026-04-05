@@ -45,26 +45,28 @@ class GraphClient:
         unread_only: bool,
         limit: int,
         received_after: datetime | None = None,
+        include_body: bool = False,
     ) -> list[MailboxMessage]:
+        select_fields = [
+            "id",
+            "conversationId",
+            "subject",
+            "from",
+            "toRecipients",
+            "ccRecipients",
+            "receivedDateTime",
+            "isRead",
+            "isDraft",
+            "categories",
+            "bodyPreview",
+            "webLink",
+        ]
+        if include_body:
+            select_fields.extend(["body", "internetMessageHeaders"])
         params = {
             "$top": min(limit, 100),
             "$orderby": "receivedDateTime desc",
-            "$select": ",".join(
-                [
-                    "id",
-                    "conversationId",
-                    "subject",
-                    "from",
-                    "toRecipients",
-                    "ccRecipients",
-                    "receivedDateTime",
-                    "isRead",
-                    "isDraft",
-                    "categories",
-                    "bodyPreview",
-                    "webLink",
-                ]
-            ),
+            "$select": ",".join(select_fields),
         }
         filters: list[str] = []
         if unread_only:

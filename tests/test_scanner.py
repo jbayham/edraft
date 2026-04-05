@@ -8,6 +8,7 @@ from edraft.config import (
     LLMConfig,
     LoggingConfig,
     ScanConfig,
+    StyleCorpusConfig,
     StateConfig,
 )
 from edraft.models import DraftResult, MailboxMessage, Recipient, ThreadContext
@@ -91,6 +92,7 @@ def test_scanner_skips_duplicate_message(tmp_path: Path) -> None:
         scan=ScanConfig(),
         filters=FilterConfig(),
         llm=LLMConfig(),
+        style_corpus=StyleCorpusConfig(),
         state=StateConfig(database_path=tmp_path / "edraft.sqlite3"),
         logging=LoggingConfig(),
         source_path=tmp_path / "edraft.toml",

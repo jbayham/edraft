@@ -48,6 +48,19 @@ style_instructions = "Write concise, professional replies. Prefer short response
 signature_block = "Thanks,\nJude"
 max_input_chars = 12000
 
+[style_corpus]
+enabled = true
+source_folders = ["sentitems"]
+sync_max_messages = 250
+retrieve_same_sender_first = true
+fts_fallback_enabled = true
+max_examples = 3
+max_example_chars = 280
+min_reply_chars = 40
+min_pair_confidence = 0.6
+eval_holdout_days = 30
+eval_max_cases = 10
+
 [state]
 database_path = "./data/edraft.sqlite3"
 

@@ -131,6 +131,16 @@ class ThreadContext:
 
 
 @dataclass(slots=True)
+class StyleExample:
+    reply_message_id: str
+    correspondent_email: str
+    subject: str
+    inbound_text: str
+    reply_text: str
+    source: str
+
+
+@dataclass(slots=True)
 class DraftResult:
     id: str
     conversation_id: str | None
