@@ -74,6 +74,12 @@ class StyleCorpusConfig:
     max_example_chars: int = 280
     min_reply_chars: int = 40
     min_pair_confidence: float = 0.6
+    pairing_confidence_weight: float = 1.5
+    same_sender_boost: float = 0.75
+    query_rank_max_bonus: float = 0.5
+    query_rank_step_penalty: float = 0.05
+    recency_max_bonus: float = 0.3
+    recency_decay_days: int = 90
     eval_holdout_days: int = 30
     eval_max_cases: int = 10
 
@@ -213,6 +219,12 @@ def parse_app_config(raw: dict[str, Any], source_path: Path) -> AppConfig:
         max_example_chars=int(style_raw.get("max_example_chars", 280)),
         min_reply_chars=int(style_raw.get("min_reply_chars", 40)),
         min_pair_confidence=float(style_raw.get("min_pair_confidence", 0.6)),
+        pairing_confidence_weight=float(style_raw.get("pairing_confidence_weight", 1.5)),
+        same_sender_boost=float(style_raw.get("same_sender_boost", 0.75)),
+        query_rank_max_bonus=float(style_raw.get("query_rank_max_bonus", 0.5)),
+        query_rank_step_penalty=float(style_raw.get("query_rank_step_penalty", 0.05)),
+        recency_max_bonus=float(style_raw.get("recency_max_bonus", 0.3)),
+        recency_decay_days=int(style_raw.get("recency_decay_days", 90)),
         eval_holdout_days=int(style_raw.get("eval_holdout_days", 30)),
         eval_max_cases=int(style_raw.get("eval_max_cases", 10)),
     )
@@ -226,6 +238,18 @@ def parse_app_config(raw: dict[str, Any], source_path: Path) -> AppConfig:
         raise ConfigError("style_corpus.min_reply_chars must be greater than 0")
     if not 0.0 <= style_corpus.min_pair_confidence <= 1.0:
         raise ConfigError("style_corpus.min_pair_confidence must be between 0 and 1")
+    if style_corpus.pairing_confidence_weight < 0:
+        raise ConfigError("style_corpus.pairing_confidence_weight must be non-negative")
+    if style_corpus.same_sender_boost < 0:
+        raise ConfigError("style_corpus.same_sender_boost must be non-negative")
+    if style_corpus.query_rank_max_bonus < 0:
+        raise ConfigError("style_corpus.query_rank_max_bonus must be non-negative")
+    if style_corpus.query_rank_step_penalty < 0:
+        raise ConfigError("style_corpus.query_rank_step_penalty must be non-negative")
+    if style_corpus.recency_max_bonus < 0:
+        raise ConfigError("style_corpus.recency_max_bonus must be non-negative")
+    if style_corpus.recency_decay_days <= 0:
+        raise ConfigError("style_corpus.recency_decay_days must be greater than 0")
     if style_corpus.eval_holdout_days <= 0:
         raise ConfigError("style_corpus.eval_holdout_days must be greater than 0")
     if style_corpus.eval_max_cases <= 0:

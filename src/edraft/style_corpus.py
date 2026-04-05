@@ -12,7 +12,7 @@ from typing import Iterator, Sequence
 
 from edraft.config import IdentityConfig, StyleCorpusConfig
 from edraft.graph_client import GraphClient
-from edraft.models import MailboxMessage, StyleExample, ThreadContext
+from edraft.models import MailboxMessage, StyleExample, ThreadContext, parse_datetime
 from edraft.text_utils import extract_authored_email_text, truncate_text
 
 
@@ -69,6 +69,14 @@ class StyleEvalCase:
     inbound_text: str
     actual_reply_text: str
     reply_received_timestamp: str | None
+
+
+@dataclass(slots=True)
+class RetrievalCandidate:
+    pair: StylePairRecord
+    source: str
+    source_priority: int
+    query_rank: int | None = None
 
 
 class StyleCorpusStore:
@@ -329,7 +337,7 @@ class StyleCorpusStore:
                     updated_at
                 FROM style_reply_pairs
                 WHERE {" AND ".join(clauses)}
-                ORDER BY reply_received_timestamp DESC
+                ORDER BY pairing_confidence DESC, reply_received_timestamp DESC
                 LIMIT ?
                 """,
                 params,
@@ -626,38 +634,61 @@ class StyleExampleRetriever:
         exclude_reply_ids: Sequence[str] = (),
         reply_received_before: datetime | None = None,
     ) -> list[StyleExample]:
-        examples: list[StyleExample] = []
         seen = set(exclude_reply_ids)
+        reference_time = reply_received_before or message.received_at or datetime.now(timezone.utc)
+        candidates: dict[str, RetrievalCandidate] = {}
 
         if self.config.retrieve_same_sender_first and message.sender_address:
             for pair in self.store.find_pairs_by_correspondent(
                 message.sender_address,
-                limit=max(self.config.max_examples * 2, 5),
+                limit=max(self.config.max_examples * 4, 8),
                 exclude_reply_ids=tuple(seen),
                 reply_received_before=reply_received_before,
             ):
                 if pair.reply_message_id in seen:
                     continue
-                examples.append(self._to_example(pair, source="same_sender"))
+                candidates[pair.reply_message_id] = RetrievalCandidate(
+                    pair=pair,
+                    source="same_sender",
+                    source_priority=2,
+                )
                 seen.add(pair.reply_message_id)
-                if len(examples) >= self.config.max_examples:
-                    return examples
 
         if self.config.fts_fallback_enabled:
             query_text = self._build_query_text(message, thread_context)
-            for pair in self.store.search_pairs(
-                query_text,
-                limit=max(self.config.max_examples * 3, 8),
-                exclude_reply_ids=tuple(seen),
-                reply_received_before=reply_received_before,
+            for query_rank, pair in enumerate(
+                self.store.search_pairs(
+                    query_text,
+                    limit=max(self.config.max_examples * 5, 10),
+                    exclude_reply_ids=tuple(exclude_reply_ids),
+                    reply_received_before=reply_received_before,
+                )
             ):
-                if pair.reply_message_id in seen:
+                if pair.reply_message_id in exclude_reply_ids:
                     continue
-                examples.append(self._to_example(pair, source="similar_conversation"))
-                seen.add(pair.reply_message_id)
-                if len(examples) >= self.config.max_examples:
-                    break
-        return examples
+                candidate = candidates.get(pair.reply_message_id)
+                if candidate is None:
+                    candidate = RetrievalCandidate(
+                        pair=pair,
+                        source="similar_conversation",
+                        source_priority=1,
+                    )
+                    candidates[pair.reply_message_id] = candidate
+                candidate.query_rank = (
+                    query_rank
+                    if candidate.query_rank is None
+                    else min(candidate.query_rank, query_rank)
+                )
+
+        ranked_candidates = sorted(
+            candidates.values(),
+            key=lambda candidate: self._sort_key(candidate, reference_time=reference_time),
+            reverse=True,
+        )
+        return [
+            self._to_example(candidate.pair, source=candidate.source)
+            for candidate in ranked_candidates[: self.config.max_examples]
+        ]
 
     def _to_example(self, pair: StylePairRecord, *, source: str) -> StyleExample:
         return StyleExample(
@@ -668,6 +699,48 @@ class StyleExampleRetriever:
             reply_text=truncate_text(pair.reply_text, self.config.max_example_chars),
             source=source,
         )
+
+    def _sort_key(
+        self,
+        candidate: RetrievalCandidate,
+        *,
+        reference_time: datetime,
+    ) -> tuple[float, int, float, float]:
+        reply_timestamp = parse_datetime(candidate.pair.reply_received_timestamp)
+        return (
+            self._retrieval_score(candidate, reference_time=reference_time),
+            candidate.source_priority,
+            self._query_rank_score(candidate.query_rank),
+            reply_timestamp.timestamp() if reply_timestamp is not None else float("-inf"),
+        )
+
+    def _retrieval_score(
+        self,
+        candidate: RetrievalCandidate,
+        *,
+        reference_time: datetime,
+    ) -> float:
+        # Favor sender-specific examples, but let stronger/high-confidence matches
+        # outrank weak examples from the same correspondent.
+        score = candidate.pair.pairing_confidence * self.config.pairing_confidence_weight
+        if candidate.source == "same_sender":
+            score += self.config.same_sender_boost
+        score += self._query_rank_score(candidate.query_rank)
+
+        reply_timestamp = parse_datetime(candidate.pair.reply_received_timestamp)
+        if reply_timestamp is not None:
+            age_days = max((reference_time - reply_timestamp).total_seconds() / 86400, 0.0)
+            recency_fraction = max(
+                0.0,
+                1.0 - min(age_days, float(self.config.recency_decay_days)) / float(self.config.recency_decay_days),
+            )
+            score += self.config.recency_max_bonus * recency_fraction
+        return score
+
+    def _query_rank_score(self, query_rank: int | None) -> float:
+        if query_rank is None:
+            return 0.0
+        return max(0.0, self.config.query_rank_max_bonus - (query_rank * self.config.query_rank_step_penalty))
 
     @staticmethod
     def _build_query_text(message: MailboxMessage, thread_context: ThreadContext) -> str:

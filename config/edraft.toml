@@ -58,6 +58,12 @@ max_examples = 3
 max_example_chars = 280
 min_reply_chars = 40
 min_pair_confidence = 0.6
+pairing_confidence_weight = 1.5
+same_sender_boost = 0.75
+query_rank_max_bonus = 0.5
+query_rank_step_penalty = 0.05
+recency_max_bonus = 0.3
+recency_decay_days = 90
 eval_holdout_days = 30
 eval_max_cases = 10
 

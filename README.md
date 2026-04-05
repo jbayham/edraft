@@ -133,8 +133,23 @@ Important config fields:
 - `style_corpus.sync_max_messages`
 - `style_corpus.max_examples`
 - `style_corpus.max_example_chars`
+- `style_corpus.pairing_confidence_weight`
+- `style_corpus.same_sender_boost`
+- `style_corpus.query_rank_max_bonus`
+- `style_corpus.query_rank_step_penalty`
+- `style_corpus.recency_max_bonus`
+- `style_corpus.recency_decay_days`
 - `style_corpus.eval_holdout_days`
 - `scan.dry_run`
+
+The style retrieval weights control how archived examples are ranked:
+
+- `style_corpus.pairing_confidence_weight`: how strongly to trust high-confidence inbound/reply pairings.
+- `style_corpus.same_sender_boost`: extra preference for examples from the same correspondent.
+- `style_corpus.query_rank_max_bonus`: maximum boost for the best full-text match.
+- `style_corpus.query_rank_step_penalty`: how quickly that full-text boost drops for lower-ranked matches.
+- `style_corpus.recency_max_bonus`: maximum preference for newer replies.
+- `style_corpus.recency_decay_days`: how long the recency bonus takes to fade to zero.
 
 ## CLI
 
@@ -293,6 +308,7 @@ The tests mock Graph and LLM boundaries and cover:
 - Graph login is blocked for your own app registration: try leaving `MICROSOFT_CLIENT_ID` unset to use the Microsoft365R fallback client if your tenant already allows it.
 - Messages are skipped too often: reduce `filters.address_score_threshold` or relax alias/domain patterns.
 - Style retrieval is weak: run `edraft corpus-sync` again after you have more real sent replies, or raise `style_corpus.sync_max_messages`.
+- Style retrieval is picking the wrong examples: tune `style_corpus.same_sender_boost`, `style_corpus.pairing_confidence_weight`, and the FTS/recency weights in `config/edraft.toml`.
 - Messages are still duplicated: confirm the SQLite database path is stable across runs and that dry-run mode is not being confused with real scans.
 
 ## Relevant Documentation

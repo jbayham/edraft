@@ -20,6 +20,12 @@ def test_parse_app_config_with_defaults(tmp_path: Path) -> None:
     assert config.style_corpus.enabled is True
     assert config.style_corpus.source_folders == ["sentitems"]
     assert config.style_corpus.max_examples == 3
+    assert config.style_corpus.pairing_confidence_weight == 1.5
+    assert config.style_corpus.same_sender_boost == 0.75
+    assert config.style_corpus.query_rank_max_bonus == 0.5
+    assert config.style_corpus.query_rank_step_penalty == 0.05
+    assert config.style_corpus.recency_max_bonus == 0.3
+    assert config.style_corpus.recency_decay_days == 90
 
 
 def test_load_app_config_reads_toml_file(tmp_path: Path) -> None:
@@ -39,9 +45,21 @@ database_path = "./state.sqlite3"
 
 [style_corpus]
 max_examples = 2
+pairing_confidence_weight = 2.0
+same_sender_boost = 0.25
+query_rank_max_bonus = 0.7
+query_rank_step_penalty = 0.02
+recency_max_bonus = 0.4
+recency_decay_days = 45
         """.strip()
     )
     config = load_app_config(config_path)
     assert config.scan.reply_mode == "reply_all"
     assert config.scan.max_message_age_hours == 12
     assert config.style_corpus.max_examples == 2
+    assert config.style_corpus.pairing_confidence_weight == 2.0
+    assert config.style_corpus.same_sender_boost == 0.25
+    assert config.style_corpus.query_rank_max_bonus == 0.7
+    assert config.style_corpus.query_rank_step_penalty == 0.02
+    assert config.style_corpus.recency_max_bonus == 0.4
+    assert config.style_corpus.recency_decay_days == 45

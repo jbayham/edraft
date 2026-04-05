@@ -174,6 +174,220 @@ def test_style_retriever_prefers_same_sender_before_generic_matches(tmp_path: Pa
     assert {example.source for example in examples} == {"same_sender", "similar_conversation"}
 
 
+def test_style_retriever_prefers_higher_confidence_same_sender_examples(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    store = StyleCorpusStore(tmp_path / "edraft.sqlite3")
+
+    stronger_inbound = _message(
+        "in-strong",
+        sender="alex@example.com",
+        recipients=["jude@example.com"],
+        subject="Timeline update",
+        body="Could you send a brief timeline update?",
+        received_at=now - timedelta(days=12),
+    )
+    stronger_reply = _message(
+        "out-strong",
+        sender="jude@example.com",
+        recipients=["alex@example.com"],
+        subject="Re: Timeline update",
+        body="I should have the revised timeline ready by Thursday afternoon.",
+        received_at=now - timedelta(days=11),
+    )
+    weaker_inbound = _message(
+        "in-weak",
+        sender="alex@example.com",
+        recipients=["jude@example.com"],
+        subject="Timeline update",
+        body="Any timeline update?",
+        received_at=now - timedelta(days=2),
+    )
+    weaker_reply = _message(
+        "out-weak",
+        sender="jude@example.com",
+        recipients=["alex@example.com"],
+        subject="Re: Timeline update",
+        body="I am still checking on that.",
+        received_at=now - timedelta(days=1),
+    )
+    store.upsert_pair(
+        inbound_message=stronger_inbound,
+        reply_message=stronger_reply,
+        correspondent_email="alex@example.com",
+        pairing_source="test",
+        pairing_confidence=1.0,
+    )
+    store.upsert_pair(
+        inbound_message=weaker_inbound,
+        reply_message=weaker_reply,
+        correspondent_email="alex@example.com",
+        pairing_source="test",
+        pairing_confidence=0.6,
+    )
+
+    retriever = StyleExampleRetriever(store, StyleCorpusConfig(max_examples=1, max_example_chars=200))
+    current_message = _message(
+        "in-current",
+        sender="alex@example.com",
+        recipients=["jude@example.com"],
+        subject="Timeline update",
+        body="Could you send the updated timeline when you have it?",
+        received_at=now,
+        conversation_id="conv-current",
+    )
+
+    examples = retriever.retrieve(current_message, ThreadContext(conversation_id=None, related_messages=[]))
+
+    assert len(examples) == 1
+    assert examples[0].reply_message_id == "out-strong"
+    assert examples[0].source == "same_sender"
+
+
+def test_style_retriever_can_replace_weak_same_sender_with_stronger_similar_match(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    store = StyleCorpusStore(tmp_path / "edraft.sqlite3")
+
+    weak_same_sender_inbound = _message(
+        "in-same",
+        sender="alex@example.com",
+        recipients=["jude@example.com"],
+        subject="Quick note",
+        body="Thanks again for the note.",
+        received_at=now - timedelta(days=40),
+    )
+    weak_same_sender_reply = _message(
+        "out-same",
+        sender="jude@example.com",
+        recipients=["alex@example.com"],
+        subject="Re: Quick note",
+        body="Glad it helped.",
+        received_at=now - timedelta(days=39),
+    )
+    strong_generic_inbound = _message(
+        "in-generic",
+        sender="other@example.com",
+        recipients=["jude@example.com"],
+        subject="Dataset timing",
+        body="Do you know when the revised dataset will be ready?",
+        received_at=now - timedelta(days=5),
+    )
+    strong_generic_reply = _message(
+        "out-generic",
+        sender="jude@example.com",
+        recipients=["other@example.com"],
+        subject="Re: Dataset timing",
+        body="I expect to have the revised dataset ready next week after the final checks.",
+        received_at=now - timedelta(days=4),
+    )
+    store.upsert_pair(
+        inbound_message=weak_same_sender_inbound,
+        reply_message=weak_same_sender_reply,
+        correspondent_email="alex@example.com",
+        pairing_source="test",
+        pairing_confidence=0.6,
+    )
+    store.upsert_pair(
+        inbound_message=strong_generic_inbound,
+        reply_message=strong_generic_reply,
+        correspondent_email="other@example.com",
+        pairing_source="test",
+        pairing_confidence=1.0,
+    )
+
+    retriever = StyleExampleRetriever(store, StyleCorpusConfig(max_examples=1, max_example_chars=200))
+    current_message = _message(
+        "in-current",
+        sender="alex@example.com",
+        recipients=["jude@example.com"],
+        subject="Dataset timing",
+        body="Could you let me know when the updated dataset will be ready?",
+        received_at=now,
+        conversation_id="conv-current",
+    )
+
+    examples = retriever.retrieve(current_message, ThreadContext(conversation_id=None, related_messages=[]))
+
+    assert len(examples) == 1
+    assert examples[0].reply_message_id == "out-generic"
+    assert examples[0].source == "similar_conversation"
+
+
+def test_style_retriever_respects_configured_sender_boost(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    store = StyleCorpusStore(tmp_path / "edraft.sqlite3")
+
+    weak_same_sender_inbound = _message(
+        "in-same",
+        sender="alex@example.com",
+        recipients=["jude@example.com"],
+        subject="Quick note",
+        body="Thanks again for the note.",
+        received_at=now - timedelta(days=40),
+    )
+    weak_same_sender_reply = _message(
+        "out-same",
+        sender="jude@example.com",
+        recipients=["alex@example.com"],
+        subject="Re: Quick note",
+        body="Glad it helped.",
+        received_at=now - timedelta(days=39),
+    )
+    strong_generic_inbound = _message(
+        "in-generic",
+        sender="other@example.com",
+        recipients=["jude@example.com"],
+        subject="Dataset timing",
+        body="Do you know when the revised dataset will be ready?",
+        received_at=now - timedelta(days=5),
+    )
+    strong_generic_reply = _message(
+        "out-generic",
+        sender="jude@example.com",
+        recipients=["other@example.com"],
+        subject="Re: Dataset timing",
+        body="I expect to have the revised dataset ready next week after the final checks.",
+        received_at=now - timedelta(days=4),
+    )
+    store.upsert_pair(
+        inbound_message=weak_same_sender_inbound,
+        reply_message=weak_same_sender_reply,
+        correspondent_email="alex@example.com",
+        pairing_source="test",
+        pairing_confidence=0.6,
+    )
+    store.upsert_pair(
+        inbound_message=strong_generic_inbound,
+        reply_message=strong_generic_reply,
+        correspondent_email="other@example.com",
+        pairing_source="test",
+        pairing_confidence=1.0,
+    )
+
+    retriever = StyleExampleRetriever(
+        store,
+        StyleCorpusConfig(
+            max_examples=1,
+            max_example_chars=200,
+            same_sender_boost=1.5,
+        ),
+    )
+    current_message = _message(
+        "in-current",
+        sender="alex@example.com",
+        recipients=["jude@example.com"],
+        subject="Dataset timing",
+        body="Could you let me know when the updated dataset will be ready?",
+        received_at=now,
+        conversation_id="conv-current",
+    )
+
+    examples = retriever.retrieve(current_message, ThreadContext(conversation_id=None, related_messages=[]))
+
+    assert len(examples) == 1
+    assert examples[0].reply_message_id == "out-same"
+    assert examples[0].source == "same_sender"
+
+
 def test_style_corpus_sync_prunes_stale_pair_when_reply_no_longer_qualifies(tmp_path: Path) -> None:
     now = datetime.now(timezone.utc)
     stale_reply = _message(
