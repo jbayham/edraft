@@ -8,11 +8,20 @@ from typing import Any, Iterator
 
 USER_TABLES = [
     "message_actions",
+    "meeting_suggestions",
     "style_messages",
     "style_reply_pairs",
     "style_eval_examples",
     "style_eval_results",
     "style_examples_fts",
+    "schema_migrations",
+    "email_messages",
+    "email_participants",
+    "email_threads",
+    "email_sync_state",
+    "briefing_runs",
+    "briefing_sources",
+    "email_event_links",
 ]
 
 
@@ -176,7 +185,12 @@ class DatabaseInspector:
             "evaluated_at",
             "reply_received_timestamp",
             "received_timestamp",
+            "received_at",
+            "sent_at",
             "receivedDateTime",
+            "last_message_at",
+            "last_successful_sync_at",
+            "created_at",
         ]:
             if column in columns:
                 return f"ORDER BY {column} DESC"

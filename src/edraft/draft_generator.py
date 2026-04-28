@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from openai import OpenAI
 
 from edraft.config import IdentityConfig, LLMConfig
-from edraft.models import MailboxMessage, StyleExample, ThreadContext
+from edraft.models import MailboxMessage, MeetingPlan, MeetingSlot, StyleExample, ThreadContext
 from edraft.text_utils import to_prompt_text, truncate_text
 
 
@@ -45,8 +45,14 @@ class DraftGenerator:
         message: MailboxMessage,
         thread_context: ThreadContext,
         style_examples: list[StyleExample] | None = None,
+        meeting_plan: MeetingPlan | None = None,
     ) -> str:
-        body, _ = self.generate_with_prompt(message, thread_context, style_examples)
+        body, _ = self.generate_with_prompt(
+            message,
+            thread_context,
+            style_examples,
+            meeting_plan=meeting_plan,
+        )
         return body
 
     def generate_with_prompt(
@@ -54,8 +60,14 @@ class DraftGenerator:
         message: MailboxMessage,
         thread_context: ThreadContext,
         style_examples: list[StyleExample] | None = None,
+        meeting_plan: MeetingPlan | None = None,
     ) -> tuple[str, DraftPrompt]:
-        prompt = self.build_prompt(message, thread_context, style_examples=style_examples)
+        prompt = self.build_prompt(
+            message,
+            thread_context,
+            style_examples=style_examples,
+            meeting_plan=meeting_plan,
+        )
         return self.generate_from_prompt(prompt), prompt
 
     def generate_from_prompt(self, prompt: DraftPrompt) -> str:
@@ -86,7 +98,16 @@ class DraftGenerator:
         thread_context: ThreadContext,
         *,
         style_examples: list[StyleExample] | None = None,
+        meeting_plan: MeetingPlan | None = None,
     ) -> DraftPrompt:
+        if meeting_plan is not None and meeting_plan.intent.is_meeting_request:
+            return self._build_meeting_prompt(
+                message,
+                thread_context,
+                meeting_plan=meeting_plan,
+                style_examples=style_examples or [],
+            )
+
         incoming_text = truncate_text(
             to_prompt_text(message.body_content, message.body_content_type) or message.body_preview,
             self.config.max_input_chars // 2,
@@ -151,6 +172,92 @@ class DraftGenerator:
         )
         return DraftPrompt(system=system, user=user)
 
+    def _build_meeting_prompt(
+        self,
+        message: MailboxMessage,
+        thread_context: ThreadContext,
+        *,
+        meeting_plan: MeetingPlan,
+        style_examples: list[StyleExample],
+    ) -> DraftPrompt:
+        incoming_text = truncate_text(
+            to_prompt_text(message.body_content, message.body_content_type) or message.body_preview,
+            self.config.max_input_chars // 2,
+        )
+        history_sections = []
+        remaining_budget = max(self.config.max_input_chars - len(incoming_text), 1000)
+        per_message_budget = max(500, remaining_budget // max(len(thread_context.related_messages), 1))
+        for item in thread_context.related_messages:
+            history_text = truncate_text(
+                to_prompt_text(item.body_content, item.body_content_type) or item.body_preview,
+                per_message_budget,
+            )
+            history_sections.append(
+                "\n".join(
+                    [
+                        f"From: {item.sender_name or item.sender_address}",
+                        f"Subject: {item.subject}",
+                        f"Received: {item.received_at.isoformat() if item.received_at else 'unknown'}",
+                        f"Body:\n{history_text}",
+                    ]
+                )
+            )
+        history_block = "\n\n---\n\n".join(history_sections) if history_sections else "(no earlier thread context found)"
+        style_block = self._render_style_examples(style_examples)
+        slots_block = self._render_meeting_slots(meeting_plan.suggested_slots)
+        system = "\n".join(
+            [
+                "You draft email replies for a human reviewer.",
+                "The reply must be concise, professional, and natural.",
+                "Never invent facts, promises, dates, or commitments.",
+                "If context is insufficient, ask a clarifying question instead of guessing.",
+                "Prefer shorter replies unless the thread clearly needs more detail.",
+                "Return only the email body text.",
+                "Do not include a subject line, 'Re:', recipient headers, or any metadata.",
+                "Use readable plain-text formatting with blank lines between paragraphs.",
+                "If you include bullets or numbered items, put each item on its own line.",
+                "If suggested times are provided, use only those times and do not invent new ones.",
+                "If no suggested times are provided, ask the sender for a narrower window or a couple of specific times.",
+                "If style examples are provided, use them only for tone, brevity, and decision style.",
+                "Do not copy names, facts, commitments, or details from style examples unless they are supported by the current thread.",
+                "Do not mention that you are an AI or that the reply is autogenerated.",
+                f"Reply as {self.identity.name} <{self.identity.email}>.",
+                self.config.style_instructions.strip(),
+            ]
+        )
+        user = "\n".join(
+            [
+                "Draft a reply to the current email about scheduling a meeting.",
+                "",
+                f"Current email subject: {message.subject}",
+                f"From: {message.sender_name or message.sender_address} <{message.sender_address}>",
+                f"To: {', '.join(recipient.address for recipient in message.to_recipients) or '(none)'}",
+                f"Cc: {', '.join(recipient.address for recipient in message.cc_recipients) or '(none)'}",
+                "",
+                "Current email body:",
+                incoming_text,
+                "",
+                "Meeting request summary:",
+                meeting_plan.intent.summary,
+                f"Meeting duration: {meeting_plan.intent.duration_minutes} minutes",
+                f"Needs clarification: {'yes' if meeting_plan.intent.needs_clarification else 'no'}",
+                f"Confidence: {meeting_plan.intent.confidence:.2f}",
+                f"Reason: {meeting_plan.intent.reason}",
+                f"Requested window: {meeting_plan.intent.requested_window or '(none)'}",
+                f"Constraints: {', '.join(meeting_plan.intent.constraints) or '(none)'}",
+                "",
+                "Suggested times:",
+                slots_block,
+                "",
+                "Recent thread context:",
+                history_block,
+                "",
+                "Past reply style examples:",
+                style_block,
+            ]
+        )
+        return DraftPrompt(system=system, user=user)
+
     def _finalize_body(self, body: str) -> str:
         text = body.replace("\r\n", "\n").replace("\r", "\n").strip()
         text = self._strip_leading_headers(text)
@@ -196,6 +303,14 @@ class DraftGenerator:
                 )
             )
         return "\n\n---\n\n".join(rendered)
+
+    def _render_meeting_slots(self, meeting_slots: list[MeetingSlot]) -> str:
+        if not meeting_slots:
+            return "(no safe openings found; ask for a narrower window)"
+        lines = []
+        for index, slot in enumerate(meeting_slots, start=1):
+            lines.append(f"{index}. {slot.label}")
+        return "\n".join(lines)
 
     def _with_signature(self, body: str) -> str:
         if not self.config.signature_block:

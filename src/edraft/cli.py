@@ -2,21 +2,27 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from edraft.auth import GraphAuthenticator, load_auth_settings
+from edraft.briefing_generator import BriefingGenerator, DailyBriefingService
+from edraft.briefing_sync import BriefingEmailSyncer
 from edraft.config import AppConfig, load_app_config
 from edraft.db_inspector import DatabaseInspector
+from edraft.draft_creator import DraftCreator
 from edraft.draft_generator import DraftGenerator
+from edraft.email_cache import EmailCacheStore
 from edraft.graph_client import GraphClient
 from edraft.logging_config import configure_logging
 from edraft.scanner import InboxScanner
 from edraft.state_store import StateStore
 from edraft.style_corpus import StyleCorpusStore, StyleCorpusSyncer, StyleExampleRetriever
 from edraft.style_eval import StyleEvaluator
+from edraft.thread_context import ThreadContextBuilder
 
 
 app = typer.Typer(help="Outlook reply-draft assistant. Creates drafts only and never sends.")
@@ -59,6 +65,15 @@ def _config_option() -> object:
         dir_okay=False,
         resolve_path=True,
     )
+
+
+def _parse_date_option(raw: str | None) -> date | None:
+    if raw is None:
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError as exc:
+        raise typer.BadParameter("date must use YYYY-MM-DD format") from exc
 
 
 @app.command("scan")
@@ -206,3 +221,142 @@ def corpus_stats(
     config = load_app_config(config_path)
     inspector = DatabaseInspector(config.state.database_path)
     typer.echo(json.dumps(inspector.corpus_stats(), indent=2))
+
+
+@app.command("brief")
+def brief(
+    config_path: Annotated[Path | None, _config_option()] = None,
+    briefing_date: Annotated[
+        str | None,
+        typer.Option("--date", help="Briefing date in YYYY-MM-DD format. Defaults to today."),
+    ] = None,
+    regenerate: Annotated[
+        bool,
+        typer.Option("--regenerate", help="Ignore any cached briefing for this date."),
+    ] = False,
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: markdown or json."),
+    ] = "markdown",
+    save: Annotated[
+        bool,
+        typer.Option(
+            "--save/--no-save",
+            help="Save the briefing output under briefing.output_directory.",
+        ),
+    ] = True,
+) -> None:
+    """Generate a Chief of Staff daily briefing."""
+    if output_format not in {"markdown", "json"}:
+        raise typer.BadParameter("--format must be markdown or json")
+    config = load_app_config(config_path)
+    configure_logging(config.logging)
+    authenticator = GraphAuthenticator(load_auth_settings())
+    graph_client = GraphClient(authenticator.get_access_token)
+    email_store = EmailCacheStore(config.state.database_path)
+    syncer = BriefingEmailSyncer(graph_client=graph_client, store=email_store, config=config)
+    generator = BriefingGenerator(config)
+    service = DailyBriefingService(
+        config=config,
+        graph_client=graph_client,
+        store=email_store,
+        syncer=syncer,
+        generator=generator,
+    )
+    try:
+        result = service.generate(
+            target_date=_parse_date_option(briefing_date),
+            regenerate=regenerate,
+        )
+    finally:
+        graph_client.close()
+
+    if save and config.briefing.output_directory is not None:
+        config.briefing.output_directory.mkdir(parents=True, exist_ok=True)
+        suffix = "json" if output_format == "json" else "md"
+        output_path = config.briefing.output_directory / f"briefing-{result.briefing_date}.{suffix}"
+        if output_format == "json":
+            output_path.write_text(json.dumps(result.to_dict(), indent=2))
+        else:
+            output_path.write_text(result.markdown)
+
+    if output_format == "json":
+        typer.echo(json.dumps(result.to_dict(), indent=2))
+    else:
+        typer.echo(result.markdown)
+
+
+@app.command("brief-show")
+def brief_show(
+    config_path: Annotated[Path | None, _config_option()] = None,
+    briefing_date: Annotated[
+        str | None,
+        typer.Option("--date", help="Cached briefing date in YYYY-MM-DD format. Defaults to today."),
+    ] = None,
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: markdown or json."),
+    ] = "markdown",
+) -> None:
+    """Show the latest cached briefing without contacting Microsoft Graph."""
+    if output_format not in {"markdown", "json"}:
+        raise typer.BadParameter("--format must be markdown or json")
+    config = load_app_config(config_path)
+    target = _parse_date_option(briefing_date) or date.today()
+    payload = EmailCacheStore(config.state.database_path).latest_briefing(target.isoformat())
+    if not payload:
+        raise typer.BadParameter(f"No cached briefing found for {target.isoformat()}")
+    if output_format == "json":
+        typer.echo(json.dumps(payload["result"], indent=2))
+    else:
+        typer.echo(payload["result"].get("markdown", ""))
+
+
+@app.command("brief-draft")
+def brief_draft(
+    graph_message_id: str,
+    config_path: Annotated[Path | None, _config_option()] = None,
+) -> None:
+    """Create an Outlook reply draft for a selected briefing source email."""
+    config, graph_client, _, style_store = build_components(config_path, require_llm=True)
+    state_store = StateStore(config.state.database_path)
+    try:
+        message = graph_client.get_message(graph_message_id)
+        context = ThreadContextBuilder(
+            graph_client,
+            max_messages=config.scan.thread_context_messages,
+        ).build(message)
+        style_examples = (
+            StyleExampleRetriever(style_store, config.style_corpus).retrieve(message, context)
+            if config.style_corpus.enabled
+            else []
+        )
+        generator = DraftGenerator(config.llm, config.identity)
+        draft_text = generator.generate(message, context, style_examples)
+        draft = DraftCreator(
+            graph_client,
+            reply_mode=config.scan.reply_mode,
+            identity=config.identity,
+        ).create(message, draft_text)
+        state_store.record_action(
+            source_message_id=message.id,
+            conversation_id=message.conversation_id,
+            subject=message.subject,
+            received_timestamp=message.received_at.isoformat() if message.received_at else None,
+            action="drafted",
+            reason="briefing_reply_draft_created",
+            created_draft_id=draft.id,
+        )
+    finally:
+        graph_client.close()
+    typer.echo(
+        json.dumps(
+            {
+                "source_message_id": graph_message_id,
+                "draft_id": draft.id,
+                "draft_web_link": draft.web_link,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            indent=2,
+        )
+    )

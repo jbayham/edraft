@@ -26,6 +26,19 @@ def test_parse_app_config_with_defaults(tmp_path: Path) -> None:
     assert config.style_corpus.query_rank_step_penalty == 0.05
     assert config.style_corpus.recency_max_bonus == 0.3
     assert config.style_corpus.recency_decay_days == 90
+    assert config.scheduling.enabled is True
+    assert config.scheduling.lookahead_days == 7
+    assert config.scheduling.max_suggestions == 3
+    assert config.scheduling.default_duration_minutes == 30
+    assert config.scheduling.business_hours_start == "09:00"
+    assert config.scheduling.business_hours_end == "17:00"
+    assert config.scheduling.weekdays_only is True
+    assert config.scheduling.minimum_buffer_minutes == 15
+    assert config.briefing.email_lookback_days == 7
+    assert config.briefing.related_emails_per_event == 5
+    assert config.briefing.max_emails == 100
+    assert config.briefing.sync_freshness_minutes == 30
+    assert config.briefing.model == "gpt-5.4"
 
 
 def test_load_app_config_reads_toml_file(tmp_path: Path) -> None:
@@ -51,6 +64,24 @@ query_rank_max_bonus = 0.7
 query_rank_step_penalty = 0.02
 recency_max_bonus = 0.4
 recency_decay_days = 45
+
+[scheduling]
+lookahead_days = 14
+max_suggestions = 2
+default_duration_minutes = 60
+business_hours_start = "08:30"
+business_hours_end = "16:30"
+weekdays_only = false
+minimum_buffer_minutes = 10
+slot_step_minutes = 15
+
+[briefing]
+email_lookback_days = 10
+related_emails_per_event = 3
+max_emails = 75
+sync_freshness_minutes = 5
+timezone = "UTC"
+model = "gpt-5.4"
         """.strip()
     )
     config = load_app_config(config_path)
@@ -63,3 +94,17 @@ recency_decay_days = 45
     assert config.style_corpus.query_rank_step_penalty == 0.02
     assert config.style_corpus.recency_max_bonus == 0.4
     assert config.style_corpus.recency_decay_days == 45
+    assert config.scheduling.lookahead_days == 14
+    assert config.scheduling.max_suggestions == 2
+    assert config.scheduling.default_duration_minutes == 60
+    assert config.scheduling.business_hours_start == "08:30"
+    assert config.scheduling.business_hours_end == "16:30"
+    assert config.scheduling.weekdays_only is False
+    assert config.scheduling.minimum_buffer_minutes == 10
+    assert config.scheduling.slot_step_minutes == 15
+    assert config.briefing.email_lookback_days == 10
+    assert config.briefing.related_emails_per_event == 3
+    assert config.briefing.max_emails == 75
+    assert config.briefing.sync_freshness_minutes == 5
+    assert config.briefing.timezone == "UTC"
+    assert config.briefing.model == "gpt-5.4"

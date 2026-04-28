@@ -67,6 +67,27 @@ recency_decay_days = 90
 eval_holdout_days = 30
 eval_max_cases = 10
 
+[scheduling]
+enabled = true
+lookahead_days = 7
+max_suggestions = 3
+default_duration_minutes = 30
+business_hours_start = "09:00"
+business_hours_end = "17:00"
+weekdays_only = true
+minimum_buffer_minutes = 15
+slot_step_minutes = 30
+
+[briefing]
+email_lookback_days = 7
+related_emails_per_event = 5
+max_emails = 100
+sync_freshness_minutes = 30
+timezone = ""
+model = ""
+cache_enabled = true
+output_directory = "./data/briefings"
+
 [state]
 database_path = "./data/edraft.sqlite3"
 

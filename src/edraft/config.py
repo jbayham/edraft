@@ -84,6 +84,31 @@ class StyleCorpusConfig:
     eval_max_cases: int = 10
 
 
+@dataclass(slots=True)
+class SchedulingConfig:
+    enabled: bool = True
+    lookahead_days: int = 7
+    max_suggestions: int = 3
+    default_duration_minutes: int = 30
+    business_hours_start: str = "09:00"
+    business_hours_end: str = "17:00"
+    weekdays_only: bool = True
+    minimum_buffer_minutes: int = 15
+    slot_step_minutes: int = 30
+
+
+@dataclass(slots=True)
+class BriefingConfig:
+    email_lookback_days: int = 7
+    related_emails_per_event: int = 5
+    max_emails: int = 100
+    sync_freshness_minutes: int = 30
+    timezone: str | None = None
+    model: str | None = None
+    cache_enabled: bool = True
+    output_directory: Path | None = None
+
+
 DEFAULT_STYLE_INSTRUCTIONS = (
     "Write concise, professional replies. Prefer short responses unless "
     "more detail is clearly needed. Do not invent facts, ask a clarifying "
@@ -109,6 +134,8 @@ class AppConfig:
     filters: FilterConfig
     llm: LLMConfig
     style_corpus: StyleCorpusConfig
+    scheduling: SchedulingConfig
+    briefing: BriefingConfig
     state: StateConfig
     logging: LoggingConfig
     source_path: Path
@@ -127,6 +154,17 @@ def _coerce_list(raw: Any, field_name: str) -> list[str]:
     if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
         raise ConfigError(f"{field_name} must be a list of strings")
     return raw
+
+
+def _parse_hhmm(raw: str, field_name: str) -> tuple[int, int]:
+    parts = raw.strip().split(":")
+    if len(parts) != 2:
+        raise ConfigError(f"{field_name} must use HH:MM format")
+    hours = int(parts[0])
+    minutes = int(parts[1])
+    if not 0 <= hours <= 23 or not 0 <= minutes <= 59:
+        raise ConfigError(f"{field_name} must use a valid HH:MM time")
+    return hours, minutes
 
 
 def load_app_config(path: Path | None = None) -> AppConfig:
@@ -255,6 +293,55 @@ def parse_app_config(raw: dict[str, Any], source_path: Path) -> AppConfig:
     if style_corpus.eval_max_cases <= 0:
         raise ConfigError("style_corpus.eval_max_cases must be greater than 0")
 
+    scheduling_raw = raw.get("scheduling", {})
+    business_hours_start = str(scheduling_raw.get("business_hours_start", "09:00")).strip()
+    business_hours_end = str(scheduling_raw.get("business_hours_end", "17:00")).strip()
+    _parse_hhmm(business_hours_start, "scheduling.business_hours_start")
+    _parse_hhmm(business_hours_end, "scheduling.business_hours_end")
+    scheduling = SchedulingConfig(
+        enabled=bool(scheduling_raw.get("enabled", True)),
+        lookahead_days=int(scheduling_raw.get("lookahead_days", 7)),
+        max_suggestions=int(scheduling_raw.get("max_suggestions", 3)),
+        default_duration_minutes=int(scheduling_raw.get("default_duration_minutes", 30)),
+        business_hours_start=business_hours_start,
+        business_hours_end=business_hours_end,
+        weekdays_only=bool(scheduling_raw.get("weekdays_only", True)),
+        minimum_buffer_minutes=int(scheduling_raw.get("minimum_buffer_minutes", 15)),
+        slot_step_minutes=int(scheduling_raw.get("slot_step_minutes", 30)),
+    )
+    if scheduling.lookahead_days <= 0:
+        raise ConfigError("scheduling.lookahead_days must be greater than 0")
+    if scheduling.max_suggestions <= 0:
+        raise ConfigError("scheduling.max_suggestions must be greater than 0")
+    if scheduling.default_duration_minutes <= 0:
+        raise ConfigError("scheduling.default_duration_minutes must be greater than 0")
+    if scheduling.minimum_buffer_minutes < 0:
+        raise ConfigError("scheduling.minimum_buffer_minutes must be non-negative")
+    if scheduling.slot_step_minutes <= 0:
+        raise ConfigError("scheduling.slot_step_minutes must be greater than 0")
+
+    briefing_raw = raw.get("briefing", {})
+    briefing_model = str(briefing_raw.get("model", "")).strip() or llm.model
+    briefing_output_raw = str(briefing_raw.get("output_directory", "./data/briefings")).strip()
+    briefing = BriefingConfig(
+        email_lookback_days=int(briefing_raw.get("email_lookback_days", 7)),
+        related_emails_per_event=int(briefing_raw.get("related_emails_per_event", 5)),
+        max_emails=int(briefing_raw.get("max_emails", 100)),
+        sync_freshness_minutes=int(briefing_raw.get("sync_freshness_minutes", 30)),
+        timezone=(str(briefing_raw["timezone"]).strip() if "timezone" in briefing_raw and briefing_raw["timezone"] else None),
+        model=briefing_model,
+        cache_enabled=bool(briefing_raw.get("cache_enabled", True)),
+        output_directory=_resolve_path(briefing_output_raw, cwd=Path.cwd()),
+    )
+    if briefing.email_lookback_days <= 0:
+        raise ConfigError("briefing.email_lookback_days must be greater than 0")
+    if briefing.related_emails_per_event <= 0:
+        raise ConfigError("briefing.related_emails_per_event must be greater than 0")
+    if briefing.max_emails <= 0:
+        raise ConfigError("briefing.max_emails must be greater than 0")
+    if briefing.sync_freshness_minutes < 0:
+        raise ConfigError("briefing.sync_freshness_minutes must be non-negative")
+
     state_raw = raw.get("state", {})
     database_raw = str(state_raw.get("database_path", "./data/edraft.sqlite3"))
     state = StateConfig(database_path=_resolve_path(database_raw, cwd=Path.cwd()))
@@ -271,6 +358,8 @@ def parse_app_config(raw: dict[str, Any], source_path: Path) -> AppConfig:
         filters=filters,
         llm=llm,
         style_corpus=style_corpus,
+        scheduling=scheduling,
+        briefing=briefing,
         state=state,
         logging=logging,
         source_path=source_path,

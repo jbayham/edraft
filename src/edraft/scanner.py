@@ -10,7 +10,8 @@ from edraft.draft_generator import DraftGenerationError, DraftGenerator
 from edraft.filters import MessageFilter
 from edraft.graph_client import GraphClient
 from edraft.message_fetcher import MessageFetcher
-from edraft.models import MailboxMessage, ScanReport
+from edraft.models import MailboxMessage, MeetingSuggestion, ScanReport, ThreadContext
+from edraft.scheduling import MeetingReplyPlanner
 from edraft.state_store import StateStore
 from edraft.style_corpus import StyleExampleRetriever
 from edraft.thread_context import ThreadContextBuilder
@@ -39,6 +40,11 @@ class InboxScanner:
         self.thread_builder = ThreadContextBuilder(
             graph_client,
             max_messages=config.scan.thread_context_messages,
+        )
+        self.meeting_planner = (
+            MeetingReplyPlanner(graph_client, config.scheduling, config.identity)
+            if config.scheduling.enabled
+            else None
         )
         self.draft_creator = DraftCreator(
             graph_client,
@@ -92,7 +98,11 @@ class InboxScanner:
         message = self.graph_client.get_message(message_id)
         decision = self.filter.evaluate(message)
         context = self.thread_builder.build(message)
+        meeting_plan = None
+        if self.meeting_planner is not None:
+            meeting_plan = self.meeting_planner.plan(message, context)
         state = self.state_store.get_record(message_id)
+        meeting_state = self.state_store.get_meeting_suggestion(message_id)
         return {
             "message": {
                 "id": message.id,
@@ -106,6 +116,8 @@ class InboxScanner:
             },
             "filter_decision": decision.to_dict(),
             "state": state.__dict__ if state else None,
+            "meeting_analysis": meeting_plan.to_dict() if meeting_plan else None,
+            "meeting_suggestion": meeting_state.__dict__ if meeting_state else None,
             "thread_context": [
                 {
                     "id": item.id,
@@ -126,8 +138,14 @@ class InboxScanner:
             )
             return
 
+        minimal_context = ThreadContext(conversation_id=message.conversation_id, related_messages=[])
+        meeting_intent = (
+            self.meeting_planner.intent_analyzer.analyze(message, minimal_context)
+            if self.meeting_planner is not None
+            else None
+        )
         decision = self.filter.evaluate(message)
-        if not decision.should_draft:
+        if not decision.should_draft and not self._should_override_for_scheduling(decision, meeting_intent):
             report.skipped += 1
             self.logger.info(
                 "Skipping message",
@@ -151,6 +169,11 @@ class InboxScanner:
             return
 
         context = self.thread_builder.build(message)
+        meeting_plan = (
+            self.meeting_planner.plan(message, context, intent=meeting_intent)
+            if self.meeting_planner is not None and meeting_intent is not None and meeting_intent.is_meeting_request
+            else None
+        )
         style_examples = (
             self.style_retriever.retrieve(message, context)
             if self.style_retriever is not None and self.config.style_corpus.enabled
@@ -158,7 +181,12 @@ class InboxScanner:
         )
         if self.draft_generator is None:
             raise DraftGenerationError("Draft generator is not configured.")
-        draft_text = self.draft_generator.generate(message, context, style_examples)
+        draft_text = self.draft_generator.generate(
+            message,
+            context,
+            style_examples,
+            meeting_plan=meeting_plan.plan if meeting_plan is not None else None,
+        )
 
         if dry_run:
             report.drafted += 1
@@ -168,6 +196,7 @@ class InboxScanner:
                     "event": "draft_would_create",
                     "message_id": message.id,
                     "style_example_ids": json.dumps([example.reply_message_id for example in style_examples]),
+                    "meeting_plan": json.dumps(meeting_plan.to_dict() if meeting_plan is not None else None),
                     "preview": draft_text[:200],
                 },
             )
@@ -183,6 +212,21 @@ class InboxScanner:
             reason="reply_draft_created",
             created_draft_id=draft.id,
         )
+        if meeting_plan is not None:
+            self.state_store.record_meeting_suggestion(
+                MeetingSuggestion(
+                    source_message_id=message.id,
+                    conversation_id=message.conversation_id,
+                    subject=message.subject,
+                    sender_email=message.sender_address,
+                    intent=meeting_plan.plan.intent.to_dict(),
+                    query_start=meeting_plan.plan.query_start.isoformat() if meeting_plan.plan.query_start else None,
+                    query_end=meeting_plan.plan.query_end.isoformat() if meeting_plan.plan.query_end else None,
+                    suggested_slots=[slot.to_dict() for slot in meeting_plan.candidate_slots],
+                    generated_reply=draft_text,
+                    updated_at=datetime.now(timezone.utc).isoformat(),
+                )
+            )
         self._apply_processed_category_if_needed(message)
         report.drafted += 1
         self.logger.info(
@@ -192,6 +236,7 @@ class InboxScanner:
                 "message_id": message.id,
                 "draft_id": draft.id,
                 "style_example_ids": json.dumps([example.reply_message_id for example in style_examples]),
+                "meeting_plan": json.dumps(meeting_plan.to_dict() if meeting_plan is not None else None),
                 "draft_web_link": draft.web_link,
             },
         )
@@ -201,3 +246,14 @@ class InboxScanner:
         if not category or not self.config.scan.apply_processed_category:
             return
         self.graph_client.add_category_to_message(message.id, category, message.categories)
+
+    @staticmethod
+    def _should_override_for_scheduling(
+        decision: object,
+        meeting_intent: object | None,
+    ) -> bool:
+        if meeting_intent is None:
+            return False
+        if not getattr(meeting_intent, "is_meeting_request", False):
+            return False
+        return getattr(decision, "primary_reason", "") == "not_confidently_addressed_to_me"

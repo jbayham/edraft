@@ -12,6 +12,7 @@ from typing import Iterator, Sequence
 
 from edraft.config import IdentityConfig, StyleCorpusConfig
 from edraft.graph_client import GraphClient
+from edraft.migrations import apply_migrations
 from edraft.models import MailboxMessage, StyleExample, ThreadContext, parse_datetime
 from edraft.text_utils import extract_authored_email_text, truncate_text
 
@@ -86,6 +87,7 @@ class StyleCorpusStore:
     def __init__(self, database_path: Path) -> None:
         self.database_path = database_path
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        apply_migrations(self.database_path)
         self._initialize()
 
     @contextmanager

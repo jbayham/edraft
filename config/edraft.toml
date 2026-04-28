@@ -67,6 +67,17 @@ recency_decay_days = 90
 eval_holdout_days = 30
 eval_max_cases = 10
 
+[scheduling]
+enabled = true
+lookahead_days = 7
+max_suggestions = 3
+default_duration_minutes = 30
+business_hours_start = "09:00"
+business_hours_end = "17:00"
+weekdays_only = true
+minimum_buffer_minutes = 15
+slot_step_minutes = 30
+
 [state]
 database_path = "./data/edraft.sqlite3"
 

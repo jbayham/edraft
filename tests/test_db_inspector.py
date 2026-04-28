@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from edraft.db_inspector import DatabaseInspector
-from edraft.models import MailboxMessage, Recipient
+from edraft.models import MailboxMessage, MeetingSuggestion, Recipient
 from edraft.state_store import StateStore
 from edraft.style_corpus import StyleCorpusStore
 
@@ -44,6 +44,20 @@ def test_database_inspector_summary_reports_known_tables(tmp_path: Path) -> None
         reason="reply_draft_created",
         created_draft_id="draft-1",
     )
+    state_store.record_meeting_suggestion(
+        MeetingSuggestion(
+            source_message_id="msg-2",
+            conversation_id="conv-2",
+            subject="Schedule time",
+            sender_email="alex@example.com",
+            intent={"is_meeting_request": True},
+            query_start=None,
+            query_end=None,
+            suggested_slots=[],
+            generated_reply="Sounds good.",
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+    )
     style_store.upsert_pair(
         inbound_message=_message(
             "in-1",
@@ -68,8 +82,10 @@ def test_database_inspector_summary_reports_known_tables(tmp_path: Path) -> None
     summary = inspector.summary()
 
     assert "message_actions" in summary["available_tables"]
+    assert "meeting_suggestions" in summary["available_tables"]
     assert "style_reply_pairs" in summary["available_tables"]
     assert summary["tables"]["message_actions"]["row_count"] == 1
+    assert summary["tables"]["meeting_suggestions"]["row_count"] == 1
     assert summary["tables"]["style_reply_pairs"]["row_count"] == 1
 
 

@@ -6,7 +6,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-from edraft.models import StateRecord
+import json
+
+from edraft.migrations import apply_migrations
+from edraft.models import MeetingSuggestion, StateRecord
 
 
 TERMINAL_ACTIONS = {"skipped", "drafted"}
@@ -16,6 +19,7 @@ class StateStore:
     def __init__(self, database_path: Path) -> None:
         self.database_path = database_path
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        apply_migrations(self.database_path)
         self._initialize()
 
     @contextmanager
@@ -40,6 +44,22 @@ class StateStore:
                     action TEXT NOT NULL,
                     reason TEXT NOT NULL,
                     created_draft_id TEXT,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS meeting_suggestions (
+                    source_message_id TEXT PRIMARY KEY,
+                    conversation_id TEXT,
+                    subject TEXT NOT NULL,
+                    sender_email TEXT NOT NULL,
+                    intent_json TEXT NOT NULL,
+                    query_start TEXT,
+                    query_end TEXT,
+                    suggested_slots_json TEXT NOT NULL,
+                    generated_reply TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
                 """
@@ -127,3 +147,72 @@ class StateStore:
                 ),
             )
         return record
+
+    def record_meeting_suggestion(self, suggestion: MeetingSuggestion) -> MeetingSuggestion:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO meeting_suggestions (
+                    source_message_id,
+                    conversation_id,
+                    subject,
+                    sender_email,
+                    intent_json,
+                    query_start,
+                    query_end,
+                    suggested_slots_json,
+                    generated_reply,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_message_id) DO UPDATE SET
+                    conversation_id = excluded.conversation_id,
+                    subject = excluded.subject,
+                    sender_email = excluded.sender_email,
+                    intent_json = excluded.intent_json,
+                    query_start = excluded.query_start,
+                    query_end = excluded.query_end,
+                    suggested_slots_json = excluded.suggested_slots_json,
+                    generated_reply = excluded.generated_reply,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    suggestion.source_message_id,
+                    suggestion.conversation_id,
+                    suggestion.subject,
+                    suggestion.sender_email,
+                    json.dumps(suggestion.intent),
+                    suggestion.query_start,
+                    suggestion.query_end,
+                    json.dumps(suggestion.suggested_slots),
+                    suggestion.generated_reply,
+                    suggestion.updated_at,
+                ),
+            )
+        return suggestion
+
+    def get_meeting_suggestion(self, source_message_id: str) -> MeetingSuggestion | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    source_message_id,
+                    conversation_id,
+                    subject,
+                    sender_email,
+                    intent_json,
+                    query_start,
+                    query_end,
+                    suggested_slots_json,
+                    generated_reply,
+                    updated_at
+                FROM meeting_suggestions
+                WHERE source_message_id = ?
+                """,
+                (source_message_id,),
+            ).fetchone()
+        if not row:
+            return None
+        payload = dict(row)
+        payload["intent"] = json.loads(payload.pop("intent_json"))
+        payload["suggested_slots"] = json.loads(payload.pop("suggested_slots_json"))
+        return MeetingSuggestion(**payload)

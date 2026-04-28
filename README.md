@@ -18,7 +18,9 @@ That is a hard constraint in this repo:
 - Fetches full message details plus recent conversation context.
 - Applies conservative heuristics to skip newsletters, automated mail, CC-only messages, and broad distribution mail that does not appear to be directly addressed to you.
 - Generates a concise reply draft with an LLM.
+- Detects clear meeting-scheduling requests, reads Outlook calendar availability, and drafts replies with a few concrete time options.
 - Can sync your historical sent replies into a local style corpus and retrieve similar past replies to improve tone.
+- Generates a Chief of Staff daily briefing from fresh calendar events plus cached recent email.
 - Creates an Outlook reply draft in the existing thread using `createReply` or `createReplyAll`.
 - Tracks processed messages in a local SQLite database so hourly runs are idempotent.
 - Optionally tags source messages with an Outlook category after processing.
@@ -27,6 +29,7 @@ That is a hard constraint in this repo:
 
 - It never sends email.
 - It does not request `Mail.Send`.
+- It does not create calendar events, holds, or free/busy writes.
 - It does not create unrelated new draft messages with a fake `RE:` subject.
 - It does not assume every unread message deserves a reply.
 
@@ -35,14 +38,19 @@ That is a hard constraint in this repo:
 Core modules:
 
 - `src/edraft/auth.py`: delegated Microsoft login via MSAL token cache.
-- `src/edraft/graph_client.py`: Graph mail reads plus reply-draft creation.
+- `src/edraft/graph_client.py`: Graph mail and calendar reads plus reply-draft creation.
 - `src/edraft/message_fetcher.py`: unread message discovery with processed-message suppression.
 - `src/edraft/filters.py`: conservative skip heuristics.
 - `src/edraft/thread_context.py`: recent conversation retrieval.
 - `src/edraft/draft_generator.py`: LLM prompt construction and draft generation.
 - `src/edraft/draft_creator.py`: reply-draft creation only.
 - `src/edraft/state_store.py`: SQLite state for idempotency.
+- `src/edraft/scheduling.py`: meeting-intent detection and free-slot planning.
 - `src/edraft/style_corpus.py`: local style-corpus sync, storage, and retrieval.
+- `src/edraft/email_cache.py`: SQLite email cache and briefing query helpers.
+- `src/edraft/briefing_sync.py`: recent inbound/sent email sync for briefings.
+- `src/edraft/briefing_matcher.py`: meeting-to-email relevance scoring.
+- `src/edraft/briefing_generator.py`: daily briefing orchestration, LLM prompt, and Markdown rendering.
 - `src/edraft/style_eval.py`: held-out style evaluation workflow.
 - `src/edraft/scanner.py`: one-pass orchestration.
 - `src/edraft/cli.py`: CLI commands.
@@ -72,7 +80,9 @@ Edit `config/edraft.toml` for your identity, scan preferences, filters, and LLM 
 
 Edit `.env` for your Microsoft and OpenAI credentials.
 
-If your tenant already allows the public client app used by `Microsoft365R`, you can leave `MICROSOFT_CLIENT_ID` unset and `edraft` will use that published client ID as a fallback. `edraft` still requests only `User.Read` and `Mail.ReadWrite`.
+If your tenant already allows the public client app used by `Microsoft365R`, you can leave `MICROSOFT_CLIENT_ID` unset and `edraft` will use that published client ID as a fallback. `edraft` still requests only `User.Read`, `Mail.ReadWrite`, and `Calendars.Read`.
+
+If your admin has not yet approved the calendar-scoped app, set `EDRAFT_AUTH_MODE=fallback` to use the preauthorized Microsoft365R-style public client in mail-only mode until approval lands. In that mode, scheduling replies will still work, but `edraft` will skip live calendar lookups and ask for a narrower time window instead of proposing calendar-based slots.
 
 ## Azure App Registration
 
@@ -89,6 +99,7 @@ Use a delegated public-client app for a single-user desktop workflow.
 9. Add delegated permissions:
    `User.Read`
    `Mail.ReadWrite`
+   `Calendars.Read`
 10. Do not add `Mail.Send`.
 11. Grant consent if your tenant requires it.
 
@@ -103,7 +114,7 @@ If your organization already permits the public client used by the R package `Mi
 - set `MICROSOFT_TENANT_ID`
 - leave `MICROSOFT_CLIENT_ID` blank or unset
 
-`edraft` will fall back to the published Microsoft365R client ID. This can help when your tenant blocks approval of a new app registration. The tradeoff is that the public client registration itself is broader than `edraft`, even though `edraft` still requests only `User.Read` and `Mail.ReadWrite`.
+`edraft` will fall back to the published Microsoft365R client ID. This can help when your tenant blocks approval of a new app registration. The tradeoff is that the public client registration itself is broader than `edraft`, even though `edraft` still requests only `User.Read`, `Mail.ReadWrite`, and `Calendars.Read`.
 
 ## Configuration
 
@@ -121,6 +132,7 @@ Important config fields:
 - `scan.reply_mode`
 - `scan.processed_category`
 - `scan.apply_processed_category`
+- `EDRAFT_AUTH_MODE`
 - `filters.sender_patterns`
 - `filters.domain_patterns`
 - `filters.group_alias_patterns`
@@ -141,6 +153,23 @@ Important config fields:
 - `style_corpus.recency_decay_days`
 - `style_corpus.eval_holdout_days`
 - `scan.dry_run`
+- `scheduling.enabled`
+- `scheduling.lookahead_days`
+- `scheduling.max_suggestions`
+- `scheduling.default_duration_minutes`
+- `scheduling.business_hours_start`
+- `scheduling.business_hours_end`
+- `scheduling.weekdays_only`
+- `scheduling.minimum_buffer_minutes`
+- `scheduling.slot_step_minutes`
+- `briefing.email_lookback_days`
+- `briefing.related_emails_per_event`
+- `briefing.max_emails`
+- `briefing.sync_freshness_minutes`
+- `briefing.timezone`
+- `briefing.model`
+- `briefing.cache_enabled`
+- `briefing.output_directory`
 
 The style retrieval weights control how archived examples are ranked:
 
@@ -150,6 +179,12 @@ The style retrieval weights control how archived examples are ranked:
 - `style_corpus.query_rank_step_penalty`: how quickly that full-text boost drops for lower-ranked matches.
 - `style_corpus.recency_max_bonus`: maximum preference for newer replies.
 - `style_corpus.recency_decay_days`: how long the recency bonus takes to fade to zero.
+
+Auth mode controls which delegated scopes are requested:
+
+- `auto`: prefer the approved edraft app if a usable token already exists; otherwise fall back to the preauthorized Microsoft365R client in mail-only mode.
+- `primary`: force the edraft app and calendar-scoped flow.
+- `fallback`: force the preauthorized Microsoft365R client and mail-only flow.
 
 ## CLI
 
@@ -179,7 +214,7 @@ edraft dry-run
 edraft inspect <message-id>
 ```
 
-This prints message details, thread context, filter decisions, and local state for debugging.
+This prints message details, thread context, filter decisions, local state, and any detected meeting-scheduling plan for debugging.
 
 ### Sync the style corpus
 
@@ -209,6 +244,38 @@ This reads the local SQLite database and summarizes corpus size, date coverage, 
 
 ```bash
 edraft corpus-stats
+```
+
+### Generate a daily briefing
+
+This syncs recent email into SQLite, fetches the target day’s calendar events fresh from Microsoft Graph, matches cached email context to meetings, prints a source-linked Markdown briefing, and saves the rendered output under briefing.output_directory. It does not send email and does not persist calendar events.
+
+```bash
+edraft brief
+```
+
+To print without writing a file:
+
+```bash
+edraft brief --no-save
+```
+
+For a specific date or JSON output:
+
+```bash
+edraft brief --date 2026-04-27 --regenerate --format json
+```
+
+To show the latest cached briefing without contacting Microsoft Graph:
+
+```bash
+edraft brief-show --date 2026-04-27
+```
+
+To create an Outlook reply draft from a selected briefing email source:
+
+```bash
+edraft brief-draft <graph-message-id>
 ```
 
 ### Inspect the local SQLite database
@@ -286,6 +353,8 @@ The same SQLite file also stores the optional style corpus in separate tables fo
 - full-text search data
 - held-out eval selections
 - saved eval case results, including prompts, generated replies, actual replies, and grades
+
+Daily briefing email data is stored in the same SQLite file as a local cache/index. The cache stores message metadata, participants, body previews, and cleaned normalized body text so briefings can use historical context without repeatedly downloading the same messages. It does not cache attachments or raw HTML. Calendar events are fetched fresh from Microsoft Graph for each generated briefing and are not stored in a calendar cache table.
 
 The `edraft corpus-stats` command shows high-level style corpus metrics, and `edraft db-inspect` can show a summary of all tables or dump rows from one table as JSON.
 
